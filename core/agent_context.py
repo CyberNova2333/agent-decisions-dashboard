@@ -4,6 +4,8 @@ Agent Decisions Dashboard - Agent Context & Verification Engine
 面向 Agent 的只读上下文导出、已否决红线约束输出与实现证据核验绑定
 """
 
+import os
+import uuid
 import json
 import datetime
 from pathlib import Path
@@ -187,31 +189,44 @@ class AgentContextEngine:
 
         new_version = self.db.upsert_topic(data)
 
-        # 更新 Markdown Frontmatter
+        # 更新 Markdown Frontmatter (完整保留 section、wf_state 与 outcome)
         md_file = self.config.decisions_dir / f"{topic_id}.md"
         parsed = self.parser.parse_markdown_file(md_file)
         if parsed:
+            section = data.get("section") or parsed.get("section", "未分类")
+            wf_state = data.get("workflow_state") or parsed.get("workflow_state", "decided")
+            badge = "🟢 已决策" if wf_state == "decided" else ("🟡 待决策" if wf_state == "pending" else "🔵 讨论中")
             updated_md = self.parser.serialize_markdown(
                 topic_id=topic_id,
                 title=parsed["title"],
-                lifecycle_badge="🟢 已决策",
-                decision_status=parsed.get("decision_status", "已定"),
+                lifecycle_badge=badge,
+                decision_status=data.get("decision_status", "已定"),
                 impl_status=data["impl_status"],
                 priority=parsed.get("priority", "普通"),
                 obj=parsed.get("object", "通用系统"),
                 func=parsed.get("function", "核心规范"),
                 core_content=parsed["core_content"],
                 existing_rounds=parsed["rounds"],
-                workflow_state=parsed.get("workflow_state", "decided"),
-                decision_outcome=parsed.get("decision_outcome", "accepted"),
+                workflow_state=wf_state,
+                decision_outcome=data.get("decision_outcome") or parsed.get("decision_outcome", "accepted"),
                 rejection_reason=parsed.get("rejection_reason", ""),
                 superseded_by=parsed.get("superseded_by", ""),
                 implementation_state=new_impl_state,
                 impl_commit=impl_commit,
                 impl_verifier=impl_note,
-                version=new_version
+                version=new_version,
+                section=section
             )
-            md_file.write_text(updated_md, encoding="utf-8")
+            temp_file = md_file.with_suffix(f".tmp.{uuid.uuid4().hex[:8]}")
+            try:
+                temp_file.write_text(updated_md, encoding="utf-8")
+                os.replace(temp_file, md_file)
+            finally:
+                if temp_file.exists():
+                    try:
+                        temp_file.unlink()
+                    except OSError:
+                        pass
 
         self.recovery.sync_metadata_json()
 

@@ -493,10 +493,10 @@ class DatabaseManager:
             target_summary = row["summary"]
             snapshot = json.loads(row["snapshot_json"])
 
-            # 清空当前业务表并按快照恢复
+            # 清空当前业务表并按快照恢复 (复用当前写连接以避免自死锁)
             cursor.execute("DELETE FROM topics")
             for t in snapshot.get("topics", []):
-                self.upsert_topic(t)
+                self.upsert_topic(t, exact_version=t.get("version", 1), conn=conn)
 
             cursor.execute("DELETE FROM settled_decisions")
             for s in snapshot.get("settled_decisions", []):
