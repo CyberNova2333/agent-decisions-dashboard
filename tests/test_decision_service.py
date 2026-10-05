@@ -104,5 +104,75 @@ class TestDecisionService(unittest.TestCase):
                 request_id="req-idemp-2"
             )
 
+    def test_version_conflict_leaves_markdown_untouched(self):
+        """测试版本冲突拒绝时，权威 Markdown 文件绝不被副作用修改 (R02)"""
+        # 1. 建立初始议题 v1
+        self.service.save_topic(
+            topic_id="adr-conflict-safe",
+            data={"title": "初始合法标题", "user_opinion": "初始原话"}
+        )
+        md_file = self.cfg.decisions_dir / "adr-conflict-safe.md"
+        content_v1 = md_file.read_text(encoding="utf-8")
+
+        # 2. 尝试用冲突版本 (期望 99) 提交修改
+        with self.assertRaises(VersionConflictError):
+            self.service.save_topic(
+                topic_id="adr-conflict-safe",
+                data={"title": "过期的冲突标题", "user_opinion": "过期的原话"},
+                expected_version=99
+            )
+
+        # 3. 验证文件绝对没有被修改
+        content_after = md_file.read_text(encoding="utf-8")
+        self.assertEqual(content_v1, content_after)
+        self.assertNotIn("过期的冲突标题", content_after)
+
+    def test_unified_version_allocation(self):
+        """测试新建议题在 Markdown、SQLite 与返回体中统一为版本 1 (R02)"""
+        res = self.service.create_topic(
+            data={"id": "adr-ver-1", "title": "统一版本测试"}
+        )
+        self.assertEqual(res["new_version"], 1)
+
+        # 检查 SQLite
+        db_topic = self.service.db.get_topic("adr-ver-1")
+        self.assertEqual(db_topic["version"], 1)
+
+        # 检查 Markdown
+        parsed = self.service.parser.parse_markdown_file(self.cfg.decisions_dir / "adr-ver-1.md")
+        self.assertEqual(parsed["version"], 1)
+
+    def test_idempotency_scoped_to_topic_id(self):
+        """测试相同的 request_id 作用于不同 topic_id 时必须判定为冲突 (R07)"""
+        self.service.save_topic(
+            topic_id="adr-scope-a",
+            data={"title": "相同请求体"},
+            request_id="shared-req-id"
+        )
+
+        with self.assertRaises(IdempotencyConflictError):
+            self.service.save_topic(
+                topic_id="adr-scope-b",
+                data={"title": "相同请求体"},
+                request_id="shared-req-id"
+            )
+
+    def test_create_topic_idempotent_retry(self):
+        """测试 create_topic 重试时优先重放，不误报议题已存在 (R07)"""
+        r1 = self.service.create_topic(
+            data={"id": "adr-create-idemp", "title": "创建幂等"},
+            request_id="req-create-1"
+        )
+        self.assertEqual(r1["new_version"], 1)
+
+        # 相同 request_id 重发 create_topic
+        r2 = self.service.create_topic(
+            data={"id": "adr-create-idemp", "title": "创建幂等"},
+            request_id="req-create-1"
+        )
+        self.assertTrue(r2.get("is_replay"))
+        self.assertEqual(r2["new_version"], 1)
+
 if __name__ == "__main__":
     unittest.main()
+

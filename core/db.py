@@ -102,9 +102,14 @@ class DatabaseManager:
                     topic_id TEXT NOT NULL,
                     req_hash TEXT NOT NULL,
                     response_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    status TEXT DEFAULT 'completed'
                 )
             """)
+            cursor.execute("PRAGMA table_info(idempotency_keys)")
+            ik_cols = [r["name"] for r in cursor.fetchall()]
+            if "status" not in ik_cols:
+                cursor.execute("ALTER TABLE idempotency_keys ADD COLUMN status TEXT DEFAULT 'completed'")
 
             # 版本历史与不可篡改快照链 (Git-like Revisions)
             cursor.execute("""
@@ -173,14 +178,20 @@ class DatabaseManager:
             row = cursor.execute("SELECT * FROM topics WHERE id = ?", (topic_id,)).fetchone()
             return dict(row) if row else None
 
-    def upsert_topic(self, data: Dict[str, Any], expected_version: Optional[int] = None) -> int:
+    def upsert_topic(
+        self,
+        data: Dict[str, Any],
+        expected_version: Optional[int] = None,
+        exact_version: Optional[int] = None,
+        conn: Optional[sqlite3.Connection] = None
+    ) -> int:
         """
-        插入或更新单个议题，支持乐观锁版本检查：
-        若提供 expected_version，检查当前版本一致性，发生冲突时抛出 VersionConflictError
-        返回更新后的新版本号 (int)
+        插入或更新单个议题，支持乐观锁版本检查与外部连接复用：
+        若提供 exact_version，直接保留指定版本号；
+        若提供 expected_version，检查当前版本一致性，发生冲突时抛出 VersionConflictError；
+        返回更新后的版本号 (int)
         """
         now_iso = datetime.datetime.now().isoformat()
-        topic_id = data["id"]
         
         # 字段映射与正交三态自动推导
         wf_state = data.get("workflow_state") or data.get("lifecycle_status") or "discussing"
@@ -204,11 +215,14 @@ class DatabaseManager:
         impl_commit = data.get("impl_commit", "")
         impl_verifier = data.get("impl_verifier", "")
 
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
+        def _execute(c: sqlite3.Connection) -> int:
+            topic_id = data["id"]
+            cursor = c.cursor()
             row = cursor.execute("SELECT version FROM topics WHERE id = ?", (topic_id,)).fetchone()
 
-            if row:
+            if exact_version is not None:
+                new_version = exact_version
+            elif row:
                 current_ver = row["version"] if row["version"] is not None else 1
                 if expected_version is not None and expected_version != current_ver:
                     raise VersionConflictError(
@@ -272,46 +286,72 @@ class DatabaseManager:
                 impl_commit,
                 impl_verifier
             ))
-            conn.commit()
             return new_version
 
-    def check_idempotency(self, request_id: str, req_hash: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
+        if conn is not None:
+            return _execute(conn)
+        else:
+            with self.get_connection() as c:
+                res = _execute(c)
+                c.commit()
+                return res
+
+    def check_idempotency(self, request_id: str, topic_id_or_hash: str, req_hash: Optional[str] = None) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """
         检查幂等性请求状态：
         返回 (is_valid, cached_response)
         - 若未记录该 request_id，返回 (True, None) 表示可以正常执行
-        - 若已记录且 req_hash 一致，返回 (True, cached_response) 表示重复幂等调用，直接返回上次结果
-        - 若已记录但 req_hash 不一致，返回 (False, None) 表示请求 ID 冲突
+        - 若已记录且 topic_id 与 req_hash 一致，返回 (True, cached_response) 表示重复幂等调用
+        - 若已记录但 topic_id 或 req_hash 不一致，返回 (False, None) 表示请求 ID 冲突
         """
         if not request_id:
             return True, None
 
+        if req_hash is None:
+            expected_topic = None
+            expected_hash = topic_id_or_hash
+        else:
+            expected_topic = topic_id_or_hash
+            expected_hash = req_hash
+
         with self.get_connection() as conn:
             cursor = conn.cursor()
             row = cursor.execute(
-                "SELECT req_hash, response_json FROM idempotency_keys WHERE request_id = ?",
+                "SELECT topic_id, req_hash, response_json, status FROM idempotency_keys WHERE request_id = ?",
                 (request_id,)
             ).fetchone()
             if not row:
                 return True, None
-            if row["req_hash"] == req_hash:
+            if expected_topic is not None and row["topic_id"] != expected_topic:
+                return False, None
+            if row["req_hash"] == expected_hash:
                 return True, json.loads(row["response_json"])
             return False, None
 
-    def record_idempotency(self, request_id: str, topic_id: str, req_hash: str, response_data: Dict[str, Any]):
-        """记录已完成的幂等请求结果"""
+    def record_idempotency(
+        self,
+        request_id: str,
+        topic_id: str,
+        req_hash: str,
+        response_data: Dict[str, Any],
+        status: str = "completed"
+    ):
+        """记录已完成或已持久化的幂等请求结果"""
         if not request_id:
             return
         now_iso = datetime.datetime.now().isoformat()
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT INTO idempotency_keys (request_id, topic_id, req_hash, response_json, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO idempotency_keys (request_id, topic_id, req_hash, response_json, created_at, status)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(request_id) DO UPDATE SET
+                    topic_id=excluded.topic_id,
+                    req_hash=excluded.req_hash,
                     response_json=excluded.response_json,
-                    created_at=excluded.created_at
-            """, (request_id, topic_id, req_hash, json.dumps(response_data, ensure_ascii=False), now_iso))
+                    created_at=excluded.created_at,
+                    status=excluded.status
+            """, (request_id, topic_id, req_hash, json.dumps(response_data, ensure_ascii=False), now_iso, status))
             conn.commit()
 
     def record_changelog(self, scope: str, change: str, basis: str):
