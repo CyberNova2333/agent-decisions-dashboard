@@ -97,8 +97,35 @@ class DecisionService:
                 cached_res["is_replay"] = True
                 return cached_res
 
-        # 2. 版本检查与分配：在产生任何持久副作用前先校验版本 (R02)
+        # 2. 版本检查与分配：在产生任何持久副作用前先校验版本 (R02, F02, F15)
         existing_row = self.db.get_topic(topic_id)
+        md_file = self.config.decisions_dir / f"{topic_id}.md"
+        existing_disk_text: Optional[str] = None
+        if md_file.exists():
+            try:
+                existing_disk_text = md_file.read_text(encoding="utf-8")
+                parsed_disk = self.parser.parse_markdown_file(md_file)
+                if parsed_disk:
+                    disk_ver = parsed_disk.get("version", 1)
+                    if expected_version is not None and disk_ver != expected_version:
+                        raise VersionConflictError(
+                            current_version=disk_ver,
+                            expected_version=expected_version,
+                            topic_id=topic_id
+                        )
+                    # 检测未入库的正文或元数据漂移 (F15)
+                    if existing_row:
+                        if parsed_disk.get("title") != existing_row.get("title") or parsed_disk.get("core_content", "").strip() != existing_row.get("content", "").strip():
+                            raise VersionConflictError(
+                                current_version=disk_ver,
+                                expected_version=expected_version,
+                                topic_id=topic_id
+                            )
+            except VersionConflictError:
+                raise
+            except Exception:
+                pass
+
         if existing_row:
             current_ver = existing_row.get("version", 1)
             if expected_version is not None and expected_version != current_ver:
@@ -228,26 +255,35 @@ class DecisionService:
         if agent_reply:
             discussion.append({"key": f"第 {new_round_num} 轮落实答复", "val": agent_reply})
 
-        new_version = self.db.upsert_topic({
-            "id": topic_id,
-            "title": title,
-            "section": section,
-            "object": obj,
-            "function": func,
-            "lifecycle_status": wf_state,
-            "workflow_state": wf_state,
-            "decision_outcome": outcome,
-            "rejection_reason": rejection_reason,
-            "superseded_by": superseded_by,
-            "implementation_state": impl_state,
-            "impl_commit": impl_commit,
-            "impl_verifier": impl_verifier,
-            "decision_status": dec_status,
-            "impl_status": impl_state,
-            "priority": priority,
-            "content": core_content,
-            "discussion": discussion
-        }, exact_version=allocated_version)
+        target_expected_version = expected_version if expected_version is not None else (existing_row.get("version") if existing_row else None)
+        try:
+            new_version = self.db.upsert_topic({
+                "id": topic_id,
+                "title": title,
+                "section": section,
+                "object": obj,
+                "function": func,
+                "lifecycle_status": wf_state,
+                "workflow_state": wf_state,
+                "decision_outcome": outcome,
+                "rejection_reason": rejection_reason,
+                "superseded_by": superseded_by,
+                "implementation_state": impl_state,
+                "impl_commit": impl_commit,
+                "impl_verifier": impl_verifier,
+                "decision_status": dec_status,
+                "impl_status": impl_state,
+                "priority": priority,
+                "content": core_content,
+                "discussion": discussion
+            }, expected_version=target_expected_version, exact_version=allocated_version)
+        except VersionConflictError:
+            if existing_disk_text is not None:
+                try:
+                    md_file.write_text(existing_disk_text, encoding="utf-8")
+                except Exception:
+                    pass
+            raise
 
         if commit_msg:
             basis_str = f"用户指示: {user_opinion[:25]}..." if user_opinion else "用户明确决策"

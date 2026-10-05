@@ -5,6 +5,7 @@ Agent Decisions Dashboard - Recovery & Consistency Engine
 支持权威版本保持、幂等重建、内容漂移检测与孤儿清理 (R04)
 """
 
+import re
 import json
 import hashlib
 from pathlib import Path

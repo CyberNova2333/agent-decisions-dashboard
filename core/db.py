@@ -220,9 +220,7 @@ class DatabaseManager:
             cursor = c.cursor()
             row = cursor.execute("SELECT version FROM topics WHERE id = ?", (topic_id,)).fetchone()
 
-            if exact_version is not None:
-                new_version = exact_version
-            elif row:
+            if row:
                 current_ver = row["version"] if row["version"] is not None else 1
                 if expected_version is not None and expected_version != current_ver:
                     raise VersionConflictError(
@@ -230,9 +228,56 @@ class DatabaseManager:
                         expected_version=expected_version,
                         topic_id=topic_id
                     )
-                new_version = current_ver + 1
+                new_version = exact_version if exact_version is not None else (current_ver + 1)
+                if expected_version is not None:
+                    cursor.execute("""
+                        UPDATE topics SET
+                            title=?, section=?, object=?, function=?,
+                            lifecycle_status=?, decision_status=?, impl_status=?, priority=?,
+                            content=?, sources=?, discussion_json=?, updated_at=?,
+                            version=?, workflow_state=?, decision_outcome=?, rejection_reason=?,
+                            superseded_by=?, implementation_state=?, impl_commit=?, impl_verifier=?
+                        WHERE id = ? AND version = ?
+                    """, (
+                        data.get("title", ""),
+                        data.get("section", "未分类"),
+                        data.get("object", "通用系统"),
+                        data.get("function", "核心规范"),
+                        lc_status,
+                        data.get("decision_status", "已定"),
+                        data.get("impl_status", "未实现"),
+                        data.get("priority", "普通"),
+                        data.get("content", ""),
+                        data.get("sources", ""),
+                        json.dumps(data.get("discussion", []), ensure_ascii=False) if isinstance(data.get("discussion"), list) else data.get("discussion_json", "[]"),
+                        data.get("updated_at", now_iso),
+                        new_version,
+                        wf_state,
+                        outcome,
+                        rejection_reason,
+                        superseded_by,
+                        impl_state,
+                        impl_commit,
+                        impl_verifier,
+                        topic_id,
+                        expected_version
+                    ))
+                    if cursor.rowcount == 0:
+                        actual = cursor.execute("SELECT id, version FROM topics WHERE id = ?", (topic_id,)).fetchone()
+                        raise VersionConflictError(
+                            current_version=actual["version"] if actual else (current_ver + 1),
+                            expected_version=expected_version,
+                            topic_id=topic_id
+                        )
+                    return new_version
             else:
-                new_version = 1
+                if expected_version is not None:
+                    raise VersionConflictError(
+                        current_version=None,
+                        expected_version=expected_version,
+                        topic_id=topic_id
+                    )
+                new_version = exact_version if exact_version is not None else 1
 
             cursor.execute("""
                 INSERT INTO topics (
