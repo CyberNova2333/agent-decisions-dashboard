@@ -19,18 +19,23 @@ Agent Decisions Dashboard - State-Invariant Regressions (R01 - R14)
 """
 
 import contextlib
+import http.client
 import json
 import os
 import sqlite3
+import subprocess
+import sys
 import tempfile
+import threading
 import unittest
+from http.server import HTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
 from core.config import Config
 from core.decision_service import DecisionService
 from core.db import VersionConflictError
-from core.server import DashboardServer
+from core.server import DashboardServer, make_handler
 
 
 class TestAuditInvariants(unittest.TestCase):
@@ -40,6 +45,16 @@ class TestAuditInvariants(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.cfg = Config({"git_commit": {"enabled": False}}, self.root)
         self.s = DecisionService(self.cfg)
+
+    def git(self, *args):
+        return subprocess.run(["git", *args], cwd=self.root, capture_output=True, text=True, check=True).stdout.strip()
+
+    def enable_git(self):
+        self.git("init", "-q")
+        self.git("config", "user.name", "Audit Test")
+        self.git("config", "user.email", "audit@example.invalid")
+        self.git("commit", "--allow-empty", "-qm", "Initial fixture")
+        self.cfg._data["git_commit"]["enabled"] = True
 
     def data(self, **kw):
         d = {
@@ -280,6 +295,158 @@ class TestAuditInvariants(unittest.TestCase):
         with patch("core.decision_service.os.replace", side_effect=OSError("injected before file replace")):
             r = self.error(lambda: self.s.restore_single_topic("a", target, expected_version=2, request_id="control-fail"))
         self.assertEqual(before, self.state())
+
+    def test_N01_restore_resume_with_real_git_enabled(self):
+        self.enable_git()
+        target = self.restore_setup()
+        head = self.git("rev-parse", "HEAD")
+        args = {"expected_version": 2, "request_id": "git-restore"}
+        with patch.object(self.s.recovery, "sync_metadata_json", side_effect=OSError("injected one-time export failure")):
+            first = self.error(lambda: self.s.restore_single_topic("a", target, **args))
+        retry = self.error(lambda: self.s.restore_single_topic("a", target, **args))
+        self.assertNotIn("exception", retry, "Restore retry calls GitEngine with non-existent keyword arguments when enabled")
+        self.assertEqual(retry["result"]["git_status"], "committed")
+
+    def test_N02_undo_creation_export_failure_is_retriable(self):
+        self.save("b", title="B baseline")
+        target = self.rev()
+        self.save(title="Accidental A")
+        args = {"expected_version": 1, "request_id": "remove-retry"}
+        with patch.object(self.s.recovery, "sync_metadata_json", side_effect=OSError("injected export failure after removal")):
+            first = self.error(lambda: self.s.restore_single_topic("a", target, **args))
+        middle = self.state()
+        retry = self.error(lambda: self.s.restore_single_topic("a", target, **args))
+        self.assertNotIn("exception", retry, "Exact removal retry conflicts with version 0 after successful DELETE")
+
+    def test_N03_verification_revision_failure_restores_export_too(self):
+        self.save(title="Unverified")
+        before = self.state()
+        with patch.object(self.s.db, "commit_revision", side_effect=sqlite3.OperationalError("injected verification audit failure")):
+            response = self.error(lambda: self.s.record_verification("a", "abc1234", "Reviewer", "Tests passed"))
+        after = self.state()
+        self.assertEqual(after, before, "Verification compensates Markdown and DB, but metadata still claims verified at v2")
+
+    def test_N04_restore_compensation_preserves_winning_file(self):
+        target = self.restore_setup()
+        real = os.replace
+        once = False
+        winner = {}
+
+        def replace(src, dst):
+            nonlocal once
+            if Path(dst) == self.doc("a") and not once:
+                once = True
+                winner.update(self.save(title="Winner v3"))
+            return real(src, dst)
+
+        with patch("core.decision_service.os.replace", side_effect=replace):
+            response = self.error(lambda: self.s.restore_single_topic("a", target, expected_version=2, request_id="restore-race"))
+        self.assertEqual(self.s.db.get_topic("a")["title"], "Winner v3")
+        self.assertEqual(self.s.parser.parse_markdown_file(self.doc("a"))["title"], "Winner v3", "CAS rejects loser but stale byte compensation overwrites winner file")
+
+    def test_N05_changed_precondition_cannot_reuse_allocated_token(self):
+        self.save(title="Start v1")
+        body = self.data(title="R1 target", new_user_opinion="R1 opinion")
+        with patch.object(self.s, "_atomic_replace", side_effect=OSError("injected before first file replace")):
+            first = self.error(lambda: self.s.save_topic("a", body, expected_version=1, request_id="request-r1"))
+        other = self.save(title="R2 wins v2")
+        retry = self.error(lambda: self.s.save_topic("a", body, expected_version=2, request_id="request-r1"))
+        self.assertTrue("exception" in retry or self.s.db.get_topic("a")["version"] > other["new_version"], "Different operation content accepted with same previously-used v2")
+
+    def test_N06_undo_creation_checks_version_at_delete(self):
+        self.save("b", title="Before A")
+        target = self.rev()
+        self.save(title="A v1")
+        real = self.s.db.get_revision_by_id
+        once = False
+        winner = {}
+
+        def lookup(r):
+            nonlocal once
+            if not once:
+                once = True
+                winner.update(self.save(title="A later v2"))
+            return real(r)
+
+        with patch.object(self.s.db, "get_revision_by_id", side_effect=lookup):
+            response = self.error(lambda: self.s.restore_single_topic("a", target, expected_version=1, request_id="remove-race"))
+        self.assertIsNotNone(self.s.db.get_topic("a"), "Undo-creation DELETE has no version predicate and removes a later edit")
+
+    def test_N07_completed_restore_cannot_alias_another_operation(self):
+        target = self.restore_setup()
+        different_target = self.rev()
+        args = {"expected_version": 2, "request_id": "same-id"}
+        with patch.object(self.s.recovery, "sync_metadata_json", side_effect=OSError("injected export fail")):
+            first = self.error(lambda: self.s.restore_single_topic("a", target, reason="Restore v1", **args))
+        retry = self.error(lambda: self.s.restore_single_topic("a", different_target, reason="Different target", **args))
+        self.assertIn("exception", retry, "last_request_id-only resumption accepts SAME key with DIFFERENT restore target")
+
+    def test_N08_process_exit_does_not_lose_restore_audit(self):
+        repo_path = Path(__file__).resolve().parent.parent
+        target = self.restore_setup()
+        code = '''import sys, os
+from pathlib import Path
+from unittest.mock import patch
+sys.path.insert(0, sys.argv[1])
+from core.config import Config
+from core.decision_service import DecisionService
+s = DecisionService(Config({'git_commit': {'enabled': False}}, Path(sys.argv[2])))
+with patch.object(s.db, 'commit_revision', side_effect=lambda **kw: os._exit(86)):
+    s.restore_single_topic('a', int(sys.argv[3]), expected_version=2, request_id='crashed-restore')
+'''
+        r = subprocess.run([sys.executable, "-c", code, str(repo_path), str(self.root), str(target)], capture_output=True, text=True, timeout=10)
+        self.assertEqual(r.returncode, 86, "Crash injection must be reached")
+        restarted = DashboardServer(self.cfg, web_dir=repo_path / "web")
+        retry = self.error(lambda: restarted.service.restore_single_topic("a", target, expected_version=2, request_id="crashed-restore"))
+        self.assertTrue(any(x["action_type"] == "TOPIC_RESTORE" for x in self.s.db.get_revisions(1000)), "Restarted operation reports success without ever recording the restored state in history")
+
+    def test_N09_control_normal_restore_git_and_replay(self):
+        self.enable_git()
+        target = self.restore_setup()
+        args = {"expected_version": 2, "request_id": "normal-restore"}
+        first = self.s.restore_single_topic("a", target, **args)
+        middle = self.state()
+        replay = self.s.restore_single_topic("a", target, **args)
+        self.assertEqual(first["git_status"], "committed")
+        self.assertEqual(self.state(), middle)
+
+    def test_N10_control_cancel_before_effects(self):
+        target = self.restore_setup()
+        before = self.state()
+        with patch("core.decision_service.os.replace", side_effect=OSError("injected before replace")):
+            r = self.error(lambda: self.s.restore_single_topic("a", target, expected_version=2, request_id="fail-before-write"))
+        self.assertEqual(self.state(), before)
+
+    def test_N11_header_precondition_change_is_not_new_content_at_old_token(self):
+        repo_path = Path(__file__).resolve().parent.parent
+        self.save(title="Start v1")
+        app = DashboardServer(self.cfg, web_dir=repo_path / "web")
+        handler = make_handler(app)
+        handler.log_message = lambda *x: None
+        srv = HTTPServer(("127.0.0.1", 0), handler)
+        thread = threading.Thread(target=srv.serve_forever, daemon=True)
+        thread.start()
+
+        def post(version):
+            conn = http.client.HTTPConnection("127.0.0.1", srv.server_port, timeout=5)
+            try:
+                conn.request("POST", "/api/topic/a/save", json.dumps(self.data(title="Request R1", new_user_opinion="R1")), {"Content-Type": "application/json", "X-Request-ID": "header-r1", "X-Expected-Version": str(version)})
+                r = conn.getresponse()
+                return {"status": r.status, "body": json.loads(r.read())}
+            finally:
+                conn.close()
+
+        try:
+            with patch.object(app.service, "_atomic_replace", side_effect=OSError("injected before R1 file replace")):
+                first = post(1)
+            winner = self.save(title="Request R2")
+            retry = post(2)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+            thread.join()
+
+        self.assertTrue(retry["status"] != 200 or retry["body"].get("new_version", 0) > winner["new_version"], "HTTP header path accepts R1 with reused v2 despite R2 already having v2")
 
 
 if __name__ == "__main__":
