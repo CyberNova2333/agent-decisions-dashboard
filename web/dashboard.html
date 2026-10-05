@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title id="page-title">Agent Decisions Dashboard</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" id="page-favicon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚖️</text></svg>">
+</head>
+<body>
+
+  <!-- App Header -->
+  <header class="app-header">
+    <div class="header-brand">
+      <div class="brand-logo" id="brand-logo">AD</div>
+      <div class="brand-text">
+        <h1 id="brand-title">
+          Agent Decisions Dashboard
+          <span style="font-size: 0.72rem; font-weight: 500; color: var(--color-primary); background: var(--color-primary-light); padding: 0.1rem 0.4rem; border-radius: var(--radius-sm);">Git + SQLite</span>
+        </h1>
+        <div class="brand-subtitle" id="brand-subtitle">人类与 Agent 协同决策台账与版本治理看板</div>
+      </div>
+    </div>
+
+    <!-- Header Actions -->
+    <div class="header-actions">
+      <div style="display: flex; align-items: center; font-size: 0.76rem; color: var(--text-dim); margin-right: 0.4rem;">
+        <span class="server-dot offline" id="server-status-dot"></span>
+        <span id="server-status-text">检查服务状态...</span>
+      </div>
+
+      <button class="btn btn-secondary" id="btn-time-machine" title="查看 Git 提交历史与 SQLite 版本快照，支持时间旅行回退">
+        🕒 版本历史与回溯
+      </button>
+
+      <button class="btn btn-primary" id="btn-new-topic" title="新建议题并入库">
+        ➕ 记录新议题
+      </button>
+
+      <button class="btn-icon" id="btn-toggle-theme" title="切换深色/浅色主题">
+        🌓
+      </button>
+    </div>
+  </header>
+
+  <!-- App Main Layout -->
+  <div class="app-container">
+    <!-- Left Sidebar -->
+    <aside class="app-sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-heading">导航视图</div>
+        <ul class="nav-list">
+          <li class="nav-item active" data-view="topics">
+            <span>📋 议题看板（生命周期）</span>
+            <span class="nav-badge" id="count-topics">0</span>
+          </li>
+          <li class="nav-item" data-view="settled">
+            <span>🎯 已定结论清单</span>
+            <span class="nav-badge" id="count-settled">0</span>
+          </li>
+          <li class="nav-item" data-view="open">
+            <span>❓ 待决策攻坚（Pending）</span>
+            <span class="nav-badge" id="count-open">0</span>
+          </li>
+          <li class="nav-item" data-view="changelog">
+            <span>📝 变更审计日志</span>
+            <span class="nav-badge" id="count-changelog">0</span>
+          </li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section" id="sidebar-filters-section">
+        <div class="sidebar-heading">
+          <span>三态生命周期筛选</span>
+          <a href="javascript:void(0)" onclick="window.dashboardApp.resetFilters()" style="color: var(--color-primary); font-size: 0.72rem; text-decoration: none;">重置</a>
+        </div>
+
+        <div class="filter-pills" id="lifecycle-filters-container">
+          <span class="filter-pill active" data-type="lifecycle" data-val="all">
+            <span>全部状态</span>
+            <span class="nav-badge" id="pill-count-all">0</span>
+          </span>
+          <span class="filter-pill" data-type="lifecycle" data-val="decided" style="border-left: 3px solid var(--color-decided);">
+            <span style="color: var(--color-decided); font-weight: 700;">🟢 已决策（定案红线）</span>
+            <span class="nav-badge" id="pill-count-decided">0</span>
+          </span>
+          <span class="filter-pill" data-type="lifecycle" data-val="discussing" style="border-left: 3px solid var(--color-discussing);">
+            <span style="color: var(--color-discussing); font-weight: 700;">🟡 待讨论（细节推敲）</span>
+            <span class="nav-badge" id="pill-count-discussing">0</span>
+          </span>
+          <span class="filter-pill" data-type="lifecycle" data-val="pending" style="border-left: 3px solid var(--color-pending);">
+            <span style="color: var(--color-pending); font-weight: 700;">🔴 待决策（等待拍板）</span>
+            <span class="nav-badge" id="pill-count-pending">0</span>
+          </span>
+        </div>
+      </div>
+
+      <!-- Categories Filter -->
+      <div class="sidebar-section" id="sidebar-categories-section">
+        <div class="sidebar-heading">业务对象筛选</div>
+        <div class="filter-pills" id="object-filters-container"></div>
+      </div>
+    </aside>
+
+    <!-- Content Area -->
+    <main class="app-content">
+      <!-- Topbar Controls -->
+      <div class="content-topbar">
+        <div class="search-box">
+          <span>🔍</span>
+          <input type="text" id="search-input" placeholder="全局搜索议题标题、正文、最新原话或落实说明...">
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 0.8rem;">
+          <span style="font-size: 0.82rem; color: var(--text-dim);" id="filtered-count-label">共 0 项议题</span>
+          <div style="display: flex; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); overflow: hidden;">
+            <button class="btn btn-secondary" id="btn-view-grid" style="border: none; border-radius: 0;" title="网格卡片">⊞</button>
+            <button class="btn btn-secondary" id="btn-view-list" style="border: none; border-radius: 0;" title="紧凑列表">☰</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- View: Topics Cards Container -->
+      <section id="view-topics" class="view-panel active">
+        <div class="topic-grid" id="topics-container">
+          <div style="color: var(--text-dim); padding: 2rem; text-align: center;">正在读取元数据并渲染...</div>
+        </div>
+      </section>
+
+      <!-- View: Settled Decisions -->
+      <section id="view-settled" class="view-panel" style="display: none;">
+        <h2 style="margin-bottom: 1rem; font-size: 1.2rem;">🎯 已定结论与架构红线（不再重复提问）</h2>
+        <div id="settled-container"></div>
+      </section>
+
+      <!-- View: Open Questions -->
+      <section id="view-open" class="view-panel" style="display: none;">
+        <h2 style="margin-bottom: 1rem; font-size: 1.2rem;">❓ 待决策攻坚清单（Awaiting Call）</h2>
+        <div id="open-container"></div>
+      </section>
+
+      <!-- View: Changelog -->
+      <section id="view-changelog" class="view-panel" style="display: none;">
+        <h2 style="margin-bottom: 1rem; font-size: 1.2rem;">📝 变更记录与审计日志</h2>
+        <div id="changelog-container"></div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Modal: Record Decision & Commit Git -->
+  <div class="modal-backdrop" id="modal-edit-decision">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="modal-edit-title">✏️ 确定决策并提交 Git</h3>
+        <button class="btn-icon" onclick="window.dashboardApp.closeModal('modal-edit-decision')">✕</button>
+      </div>
+      <div class="modal-body">
+        <div style="display: flex; gap: 0.5rem; align-items: center; font-size: 0.8rem; color: var(--text-dim);">
+          <span class="chip" id="modal-topic-id">#id</span>
+          <span id="modal-topic-category">分类</span>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">生命周期三态流转：</label>
+          <select class="form-select" id="form-lifecycle-status">
+            <option value="decided">🟢 已决策（双方定案形成不可推翻红线，不再重提）</option>
+            <option value="discussing">🟡 待讨论（技术细节、参数推敲或架构提案中）</option>
+            <option value="pending">🔴 待决策（存在方案分歧或卡点，等待拍板）</option>
+          </select>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+          <div class="form-group">
+            <label class="form-label">决策状态：</label>
+            <input type="text" class="form-input" id="form-decision-status" placeholder="如：已定案、你已明确同意">
+          </div>
+          <div class="form-group">
+            <label class="form-label">实现现状：</label>
+            <input type="text" class="form-input" id="form-impl-status" placeholder="如：未实现、已有原型、已发布">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">💡 用户意见（最新用户答复原话，将追加为新轮次）：</label>
+          <textarea class="form-textarea" id="form-user-opinion" rows="3" placeholder="录入用户明确意见或决策指示原话..."></textarea>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">🤖 团队/Agent 答复（落地说明与排期）：</label>
+          <textarea class="form-textarea" id="form-agent-reply" rows="3" placeholder="录入团队技术回应与落地承诺..."></textarea>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Git 变更提交说明 (Commit Message)：</label>
+          <input type="text" class="form-input" id="form-commit-message" placeholder="简要说明本次决定的具体内容">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="window.dashboardApp.closeModal('modal-edit-decision')">取消</button>
+        <button class="btn btn-primary" onclick="window.dashboardApp.submitDecision()">确定决策并生成 Git Commit</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Time Machine Drawer -->
+  <div class="drawer-backdrop" id="drawer-time-machine">
+    <div class="drawer-panel">
+      <div class="modal-header">
+        <h3>🕒 版本历史与回溯（时间机器）</h3>
+        <button class="btn-icon" onclick="window.dashboardApp.closeDrawer('drawer-time-machine')">✕</button>
+      </div>
+      <div style="padding: 1rem; overflow-y: auto; flex: 1;" id="drawer-history-list">
+        <div style="color: var(--text-dim); text-align: center;">正在加载 Git 提交记录与快照...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Scripts -->
+  <script src="default_data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
