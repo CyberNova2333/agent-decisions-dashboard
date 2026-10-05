@@ -491,19 +491,44 @@ class DatabaseManager:
             rev_id = cursor.lastrowid
             return {"rev_id": rev_id, "rev_hash": rev_hash, "created_at": now_str}
 
-    def get_revisions(self, limit: int = 50) -> List[Dict[str, Any]]:
-        """获取版本快照提交列表"""
+    def get_revisions(self, limit: int = 50, offset: int = 0, topic_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """获取版本快照提交列表，支持 topic_id 过滤与 offset 分页 (U13, B06, B07)"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            rows = cursor.execute("""
-                SELECT rev_id, rev_hash, created_at, author, action_type,
-                       topic_id, topic_title, summary, old_lifecycle,
-                       new_lifecycle, user_opinion, agent_reply, diff_summary
-                FROM revisions
-                ORDER BY rev_id DESC
-                LIMIT ?
-            """, (limit,)).fetchall()
-            return [dict(r) for r in rows]
+            if topic_id:
+                rows = cursor.execute("""
+                    SELECT rev_id, rev_hash, created_at, author, action_type,
+                           topic_id, topic_title, summary, old_lifecycle,
+                           new_lifecycle, user_opinion, agent_reply, diff_summary, snapshot_json
+                    FROM revisions
+                    WHERE topic_id = ? OR topic_id IS NULL OR topic_id = '' OR action_type IN ('FULL_ROLLBACK', 'IMPORT_FULL', 'INIT', 'BASELINE_IMPORT')
+                    ORDER BY rev_id DESC
+                    LIMIT ? OFFSET ?
+                """, (topic_id, limit, offset)).fetchall()
+            else:
+                rows = cursor.execute("""
+                    SELECT rev_id, rev_hash, created_at, author, action_type,
+                           topic_id, topic_title, summary, old_lifecycle,
+                           new_lifecycle, user_opinion, agent_reply, diff_summary, snapshot_json
+                    FROM revisions
+                    ORDER BY rev_id DESC
+                    LIMIT ? OFFSET ?
+                """, (limit, offset)).fetchall()
+
+            result = []
+            for r in rows:
+                d = dict(r)
+                snap_ids = []
+                if d.get("snapshot_json"):
+                    try:
+                        snap_obj = json.loads(d["snapshot_json"])
+                        snap_ids = [t["id"] for t in snap_obj.get("topics", []) if "id" in t]
+                    except Exception:
+                        snap_ids = []
+                d["snapshot_topic_ids"] = snap_ids
+                d.pop("snapshot_json", None)
+                result.append(d)
+            return result
 
     def get_revision_by_id(self, rev_id: int) -> Optional[Dict[str, Any]]:
         """按 rev_id 查询快照详情"""
