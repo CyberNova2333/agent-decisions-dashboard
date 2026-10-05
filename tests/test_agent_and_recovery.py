@@ -6,6 +6,7 @@ Consistency Verification, Markdown-to-Index Reconstruction, and Agent Prompt Exp
 
 import unittest
 import tempfile
+import json
 from pathlib import Path
 from core.config import Config
 from core.decision_service import DecisionService
@@ -78,6 +79,79 @@ rejection_reason: "性能损耗超过200%"
         # 验证一致性检查应返回 True
         chk = self.recovery.check_consistency()
         self.assertTrue(chk["consistent"])
+
+    def test_rebuild_preserves_version_and_is_idempotent(self):
+        """测试 Markdown 重建保留文件声明的 version，且多次重建保持严格幂等 (R04)"""
+        self.cfg.decisions_dir.mkdir(parents=True, exist_ok=True)
+        md = self.cfg.decisions_dir / "adr-ver-7.md"
+        md.write_text("""---
+schema_version: "2.0"
+id: "adr-ver-7"
+title: "版本保留测试"
+version: 7
+workflow_state: "decided"
+---
+
+# 版本保留测试
+
+## 核心论述与现实依据
+内容
+""", encoding="utf-8")
+
+        # 首次重建
+        res1 = self.recovery.rebuild_index_from_markdown()
+        self.assertEqual(res1["status"], "success")
+        t = self.service.db.get_topic("adr-ver-7")
+        self.assertEqual(t["version"], 7)
+
+        # 连续第二次重建：版本号必须依然是 7，绝不能累加为 8 (R04)
+        res2 = self.recovery.rebuild_index_from_markdown()
+        self.assertEqual(res2["status"], "success")
+        t_again = self.service.db.get_topic("adr-ver-7")
+        self.assertEqual(t_again["version"], 7)
+
+    def test_rebuild_removes_deleted_markdown_topics(self):
+        """测试删除磁盘 Markdown 后重建索引，数据库同步移除该议题 (R04)"""
+        self.service.save_topic("adr-to-delete", {"title": "即将删除的文件"})
+        md_file = self.cfg.decisions_dir / "adr-to-delete.md"
+        self.assertTrue(md_file.exists())
+        self.assertIsNotNone(self.service.db.get_topic("adr-to-delete"))
+
+        # 删除磁盘文件
+        md_file.unlink()
+
+        # 重建索引
+        self.recovery.rebuild_index_from_markdown()
+        # 数据库中应该已被移除
+        self.assertIsNone(self.service.db.get_topic("adr-to-delete"))
+
+    def test_consistency_check_catches_content_drift(self):
+        """测试外部直接修改 Markdown 正文时，一致性检查精准捕获内容漂移 (R04)"""
+        self.service.save_topic("adr-drift", {"title": "防漂移测试", "user_opinion": "初始意见"})
+        md_file = self.cfg.decisions_dir / "adr-drift.md"
+
+        # 外部直接修改 Markdown 内容，但不改版本号
+        raw_text = md_file.read_text(encoding="utf-8")
+        modified_text = raw_text.replace("防漂移测试", "外部篡改后的标题")
+        md_file.write_text(modified_text, encoding="utf-8")
+
+        chk = self.recovery.check_consistency()
+        self.assertFalse(chk["consistent"])
+        self.assertEqual(len(chk["desynced_topics"]), 1)
+        self.assertTrue(chk["desynced_topics"][0]["content_drift"])
+
+    def test_consistency_check_catches_metadata_drift(self):
+        """测试 metadata.json 中的字段发生漂移时，一致性检查精准报警 (R04)"""
+        self.service.save_topic("adr-meta-drift", {"title": "元数据漂移测试"})
+        
+        # 篡改 metadata.json 的标题，但不改条目数量
+        meta_content = json.loads(self.cfg.metadata_json_path.read_text(encoding="utf-8"))
+        meta_content["topics"][0]["title"] = "篡改元数据标题"
+        self.cfg.metadata_json_path.write_text(json.dumps(meta_content, ensure_ascii=False), encoding="utf-8")
+
+        chk = self.recovery.check_consistency()
+        self.assertFalse(chk["consistent"])
+        self.assertFalse(chk["metadata_json_synced"])
 
     def test_agent_context_separation_and_markdown(self):
         """P2-F: 验证 Agent 上下文导出中有效决策与已否决红线的明确分离"""
