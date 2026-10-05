@@ -258,12 +258,17 @@ def make_handler(server: DashboardServer):
                 return
 
             request_id = self.headers.get("X-Request-ID") or data.get("request_id")
-            expected_ver = self.headers.get("X-Expected-Version") or data.get("expected_version")
-            if expected_ver is not None:
+            expected_ver_raw = self.headers.get("X-Expected-Version") or data.get("expected_version")
+            expected_ver = None
+            if expected_ver_raw is not None:
                 try:
-                    expected_ver = int(expected_ver)
-                except ValueError:
-                    expected_ver = None
+                    expected_ver = int(expected_ver_raw)
+                    if expected_ver < 1:
+                        self._send_json(400, {"error": "invalid_expected_version", "message": "X-Expected-Version 必须是大于等于 1 的正整数"})
+                        return
+                except (ValueError, TypeError):
+                    self._send_json(400, {"error": "invalid_expected_version", "message": "X-Expected-Version 格式非法，必须是有效整数"})
+                    return
 
             # 1. 保存议题
             if path.startswith("/api/topic/") and path.endswith("/save"):

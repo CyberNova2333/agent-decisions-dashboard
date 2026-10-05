@@ -4,6 +4,7 @@ Agent Decisions Dashboard - Decision Service
 核心业务流程协调层：创建、保存、乐观锁并发检查、幂等去重、受控提交与精准回滚
 """
 
+import os
 import json
 import uuid
 import hashlib
@@ -77,31 +78,90 @@ class DecisionService:
         topic_id = self.validate_topic_id(topic_id)
         op_id = f"op-{uuid.uuid4().hex[:8]}"
 
-        # 1. 幂等性检查
-        req_hash = hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+        # 1. 幂等性检查 (指纹绑定 topic_id 与规范化 data)
+        req_hash = hashlib.sha256(f"{topic_id}:{json.dumps(data, sort_keys=True, ensure_ascii=False)}".encode("utf-8")).hexdigest()
         if request_id:
-            is_valid, cached_res = self.db.check_idempotency(request_id, req_hash)
+            is_valid, cached_res = self.db.check_idempotency(request_id, topic_id, req_hash)
             if not is_valid:
-                raise IdempotencyConflictError(f"请求 ID [{request_id}] 冲突：相同 ID 携带了不同的请求数据")
+                raise IdempotencyConflictError(f"请求 ID [{request_id}] 冲突：相同 ID 携带了不同的请求数据或目标议题")
             if cached_res is not None:
+                # 若之前核心写入成功但导出待补做，在重放时补偿完成
+                if cached_res.get("export_status") != "ok":
+                    try:
+                        self.recovery.sync_metadata_json()
+                        cached_res["export_status"] = "ok"
+                        self.db.record_idempotency(request_id, topic_id, req_hash, cached_res, status="completed")
+                    except Exception:
+                        pass
                 cached_res["is_replay"] = True
                 return cached_res
 
-        # 2. 准备议题字段
+        # 2. 版本检查与分配：在产生任何持久副作用前先校验版本 (R02)
+        existing_row = self.db.get_topic(topic_id)
+        if existing_row:
+            current_ver = existing_row.get("version", 1)
+            if expected_version is not None and expected_version != current_ver:
+                raise VersionConflictError(
+                    current_version=current_ver,
+                    expected_version=expected_version,
+                    topic_id=topic_id
+                )
+            allocated_version = current_ver + 1
+        else:
+            if expected_version is not None and expected_version != 1:
+                raise VersionConflictError(
+                    current_version=0,
+                    expected_version=expected_version,
+                    topic_id=topic_id
+                )
+            allocated_version = 1
+
+        # 3. 准备议题字段与业务合法性校验
         title = (data.get("title") or topic_id).strip()
         wf_state = data.get("workflow_state") or data.get("lifecycle_status") or "discussing"
         outcome = data.get("decision_outcome", "")
         rejection_reason = data.get("rejection_reason", "").strip()
         superseded_by = data.get("superseded_by", "").strip()
+
+        # 否决状态强制校验否决原因 (R09)
+        if outcome == "rejected" and not rejection_reason:
+            raise TopicValidationError("议题状态标记为已否决 (rejected) 时，必须填写具体的否决原因 (rejection_reason)")
+
         impl_state = data.get("implementation_state") or data.get("impl_status") or "not_started"
-        impl_commit = data.get("impl_commit", "").strip()
-        impl_verifier = data.get("impl_verifier", "").strip()
-        priority = data.get("priority", "普通")
-        section = data.get("section", "未分类")
-        obj = data.get("object", "通用系统")
-        func = data.get("function", "核心规范")
+
+        # 保留原值策略 (R06)：区分未提供与显式清空，防止普通保存清空原有核验与替代信息
+        if existing_row:
+            impl_commit = data["impl_commit"].strip() if "impl_commit" in data else existing_row.get("impl_commit", "")
+            impl_verifier = data["impl_verifier"].strip() if "impl_verifier" in data else existing_row.get("impl_verifier", "")
+            if "superseded_by" not in data:
+                superseded_by = existing_row.get("superseded_by", "")
+            if "rejection_reason" not in data:
+                rejection_reason = existing_row.get("rejection_reason", "")
+            if "section" not in data:
+                section = existing_row.get("section", "未分类")
+            else:
+                section = data.get("section", "未分类")
+            if "object" not in data:
+                obj = existing_row.get("object", "通用系统")
+            else:
+                obj = data.get("object", "通用系统")
+            if "function" not in data:
+                func = existing_row.get("function", "核心规范")
+            else:
+                func = data.get("function", "核心规范")
+            if "priority" not in data:
+                priority = existing_row.get("priority", "普通")
+            else:
+                priority = data.get("priority", "普通")
+        else:
+            impl_commit = data.get("impl_commit", "").strip()
+            impl_verifier = data.get("impl_verifier", "").strip()
+            section = data.get("section", "未分类")
+            obj = data.get("object", "通用系统")
+            func = data.get("function", "核心规范")
+            priority = data.get("priority", "普通")
+
         dec_status = data.get("decision_status", "已定" if wf_state == "decided" else "待定")
-        
         user_opinion = (data.get("new_user_opinion") or data.get("user_opinion") or "").strip()
         agent_reply = (data.get("new_agent_reply") or data.get("agent_reply") or "").strip()
         commit_msg = (data.get("commit_message") or "").strip()
@@ -109,7 +169,7 @@ class DecisionService:
 
         lifecycle_badge = self.get_lifecycle_badge(wf_state)
 
-        # 3. 读取当前 Markdown 既有轮次
+        # 4. 读取既有 Markdown 与历史轮次
         md_file = self.config.decisions_dir / f"{topic_id}.md"
         existing_doc = self.parser.parse_markdown_file(md_file)
         current_rounds = existing_doc["rounds"] if existing_doc else []
@@ -125,7 +185,7 @@ class DecisionService:
                 "agent_reply": agent_reply
             }
 
-        # 4. 写入权威事实源 Markdown (带 Frontmatter 2.0 规范)
+        # 5. 序列化 Markdown 并原子化写入磁盘 (临时文件 + os.replace)
         md_text = self.parser.serialize_markdown(
             topic_id=topic_id,
             title=title,
@@ -145,15 +205,23 @@ class DecisionService:
             implementation_state=impl_state,
             impl_commit=impl_commit,
             impl_verifier=impl_verifier,
-            version=(expected_version or 1) + 1,
+            version=allocated_version,
             section=section
         )
         self.config.decisions_dir.mkdir(parents=True, exist_ok=True)
-        md_file.write_text(md_text, encoding="utf-8")
+        temp_file = md_file.with_suffix(f".tmp.{uuid.uuid4().hex[:8]}")
+        try:
+            temp_file.write_text(md_text, encoding="utf-8")
+            os.replace(temp_file, md_file)
+        finally:
+            if temp_file.exists():
+                try:
+                    temp_file.unlink()
+                except OSError:
+                    pass
 
-        # 5. 更新 SQLite 数据库（携带乐观锁校验）
-        topic_row = self.db.get_topic(topic_id)
-        discussion = json.loads(topic_row["discussion_json"]) if (topic_row and topic_row.get("discussion_json")) else []
+        # 6. 更新 SQLite 数据库结构化索引
+        discussion = json.loads(existing_row["discussion_json"]) if (existing_row and existing_row.get("discussion_json")) else []
         if user_opinion:
             discussion.append({"key": f"第 {new_round_num} 轮用户意见", "val": user_opinion})
         if agent_reply:
@@ -178,7 +246,7 @@ class DecisionService:
             "priority": priority,
             "content": core_content,
             "discussion": discussion
-        }, expected_version=expected_version)
+        }, exact_version=allocated_version)
 
         if commit_msg:
             basis_str = f"用户指示: {user_opinion[:25]}..." if user_opinion else "用户明确决策"
@@ -188,10 +256,46 @@ class DecisionService:
                 basis=basis_str
             )
 
-        # 6. 同步刷新 metadata.json 派生输出
-        self.recovery.sync_metadata_json()
+        # 7. 提交 Revision 快照（在 Git 暂存 decisions.db 之前写入 DB，确保 Revision 进入 Git HEAD） (R10)
+        rev_info = self.db.commit_revision(
+            action_type="RECORD_DECISION",
+            summary=f"[{lifecycle_badge}] {title} - {commit_msg or '更新决策内容'}",
+            topic_id=topic_id,
+            author="用户",
+            user_opinion=user_opinion,
+            agent_reply=agent_reply,
+            new_lifecycle=wf_state,
+            diff_summary=f"v{new_version}"
+        )
 
-        # 7. 受控 Git 自动语义化提交（暂存区保护）
+        # 核心落盘后记录幂等中间状态
+        preliminary_payload = {
+            "status": "success",
+            "operation_id": op_id,
+            "topic_id": topic_id,
+            "title": title,
+            "new_version": new_version,
+            "round": new_round_num,
+            "save_status": "ok",
+            "export_status": "pending",
+            "git_status": "pending",
+            "revision_hash": rev_info["rev_hash"]
+        }
+        if request_id:
+            self.db.record_idempotency(request_id, topic_id, req_hash, preliminary_payload, status="applied")
+
+        # 8. 同步刷新 metadata.json 派生输出
+        export_status = "ok"
+        try:
+            self.recovery.sync_metadata_json()
+        except Exception:
+            export_status = "failed"
+            if request_id:
+                preliminary_payload["export_status"] = "failed"
+                self.db.record_idempotency(request_id, topic_id, req_hash, preliminary_payload, status="applied")
+            raise
+
+        # 9. 受控 Git 自动语义化提交（暂存区保护）
         staged_targets = [md_file, self.config.metadata_json_path, self.config.database_path]
         git_res: GitCommitResult = self.git.commit_decision(
             topic_title=title,
@@ -202,20 +306,6 @@ class DecisionService:
             staged_files=staged_targets
         )
 
-        # 8. 记录 Revision 快照
-        commit_info = git_res.commit_hash if git_res.success else f"skipped_{git_res.status}"
-        rev_info = self.db.commit_revision(
-            action_type="RECORD_DECISION",
-            summary=f"[{lifecycle_badge}] {title} - {commit_msg or '更新决策内容'}",
-            topic_id=topic_id,
-            author="用户",
-            user_opinion=user_opinion,
-            agent_reply=agent_reply,
-            new_lifecycle=wf_state,
-            diff_summary=f"Git: {commit_info} (v{new_version})"
-        )
-
-        # 9. 构造结构化响应
         response_payload = {
             "status": "success",
             "operation_id": op_id,
@@ -224,7 +314,7 @@ class DecisionService:
             "new_version": new_version,
             "round": new_round_num,
             "save_status": "ok",
-            "export_status": "ok",
+            "export_status": export_status,
             "git_status": git_res.status,
             "commit_hash": git_res.commit_hash,
             "git_message": git_res.message,
@@ -233,15 +323,27 @@ class DecisionService:
             "message": f"决策已入库（版本 v{new_version}）！Git 状态: {git_res.message}"
         }
 
-        # 记录幂等结果
+        # 记录已完成的最终幂等结果
         if request_id:
-            self.db.record_idempotency(request_id, topic_id, req_hash, response_payload)
+            self.db.record_idempotency(request_id, topic_id, req_hash, response_payload, status="completed")
 
         return response_payload
 
     def create_topic(self, data: Dict[str, Any], request_id: Optional[str] = None) -> Dict[str, Any]:
-        """创建全新议题"""
+        """创建全新议题，幂等重放检查优先于已存在检查 (R07)"""
         topic_id = self.validate_topic_id(data.get("id", ""))
+        
+        # 1. 幂等优先：若此请求 ID 之前已成功创建该议题，直接重放结果
+        if request_id:
+            req_hash = hashlib.sha256(f"{topic_id}:{json.dumps(data, sort_keys=True, ensure_ascii=False)}".encode("utf-8")).hexdigest()
+            is_valid, cached_res = self.db.check_idempotency(request_id, topic_id, req_hash)
+            if not is_valid:
+                raise IdempotencyConflictError(f"请求 ID [{request_id}] 冲突：相同 ID 携带了不同的请求数据或目标议题")
+            if cached_res is not None:
+                cached_res["is_replay"] = True
+                return cached_res
+
+        # 2. 检查议题存在性
         existing = self.db.get_topic(topic_id)
         if existing:
             raise TopicValidationError(f"议题 ID [{topic_id}] 已存在")
