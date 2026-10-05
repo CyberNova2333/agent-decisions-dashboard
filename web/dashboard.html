@@ -1,40 +1,38 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="dark">
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title id="page-title">Agent Decisions Dashboard</title>
-  <link rel="stylesheet" href="style.css">
   <link rel="icon" id="page-favicon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚖️</text></svg>">
+  <link rel="stylesheet" href="style.css">
 </head>
-<body>
-
-  <!-- App Header -->
+<body data-theme="dark">
+  <!-- Top Global Navigation -->
   <header class="app-header">
-    <div class="header-brand">
-      <div class="brand-logo" id="brand-logo">AD</div>
+    <div class="brand">
+      <span class="brand-logo" id="brand-logo">AD</span>
       <div class="brand-text">
-        <h1 id="brand-title">
-          Agent Decisions Dashboard
-          <span style="font-size: 0.72rem; font-weight: 500; color: var(--color-primary); background: var(--color-primary-light); padding: 0.1rem 0.4rem; border-radius: var(--radius-sm);">Git + SQLite</span>
-        </h1>
-        <div class="brand-subtitle" id="brand-subtitle">人类与 Agent 协同决策台账与版本治理看板</div>
+        <h1 id="brand-title">Agent Decisions Dashboard <span id="brand-icon">⚖️</span></h1>
+        <div class="brand-subtitle" id="brand-subtitle">人机协同决策治理、正交生命周期与不可篡改时间机器台账</div>
       </div>
     </div>
 
-    <!-- Header Actions -->
     <div class="header-actions">
-      <div style="display: flex; align-items: center; font-size: 0.76rem; color: var(--text-dim); margin-right: 0.4rem;">
-        <span class="server-dot offline" id="server-status-dot"></span>
-        <span id="server-status-text">检查服务状态...</span>
+      <!-- Server Status Badge -->
+      <div class="server-status" id="server-status" title="当前数据后端服务状态">
+        <span class="server-dot online" id="server-status-dot"></span>
+        <span id="server-status-text">Git + SQLite 在线</span>
       </div>
 
-      <button class="btn btn-secondary" id="btn-time-machine" title="查看 Git 提交历史与 SQLite 版本快照，支持时间旅行回退">
-        🕒 版本历史与回溯
+      <button class="btn btn-secondary" id="btn-agent-context" onclick="window.dashboardApp.openAgentContextModal()" title="导出只读治理 Prompt Markdown">
+        <span>🤖</span>
+        <span>Agent Context</span>
       </button>
 
-      <button class="btn btn-primary" id="btn-new-topic" title="新建议题并入库">
-        ➕ 记录新议题
+      <button class="btn btn-secondary" id="btn-time-machine" onclick="window.dashboardApp.openTimeMachine()" title="查看 Git 提交记录与快照链">
+        <span>🕒</span>
+        <span>时间机器</span>
       </button>
 
       <button class="btn-icon" id="btn-toggle-theme" title="切换深色/浅色主题">
@@ -71,7 +69,7 @@
 
       <div class="sidebar-section" id="sidebar-filters-section">
         <div class="sidebar-heading">
-          <span>三态生命周期筛选</span>
+          <span>工作流状态筛选</span>
           <a href="javascript:void(0)" onclick="window.dashboardApp.resetFilters()" style="color: var(--color-primary); font-size: 0.72rem; text-decoration: none;">重置</a>
         </div>
 
@@ -95,6 +93,23 @@
         </div>
       </div>
 
+      <!-- Decision Outcome Filter -->
+      <div class="sidebar-section">
+        <div class="sidebar-heading">决策结论维度</div>
+        <div class="filter-pills">
+          <span class="filter-pill active" data-type="outcome" data-val="all">
+            <span>全部结论</span>
+          </span>
+          <span class="filter-pill" data-type="outcome" data-val="accepted" style="border-left: 3px solid #10b981;">
+            <span>🟢 已采纳</span>
+          </span>
+          <span class="filter-pill" data-type="outcome" data-val="rejected" style="border-left: 3px solid #ef4444;">
+            <span>❌ 明确否决方案</span>
+            <span class="nav-badge" id="pill-count-rejected" style="background: rgba(239,68,68,0.2); color: #ef4444;">0</span>
+          </span>
+        </div>
+      </div>
+
       <!-- Categories Filter -->
       <div class="sidebar-section" id="sidebar-categories-section">
         <div class="sidebar-heading">业务对象筛选</div>
@@ -108,7 +123,7 @@
       <div class="content-topbar">
         <div class="search-box">
           <span>🔍</span>
-          <input type="text" id="search-input" placeholder="全局搜索议题标题、正文、最新原话或落实说明...">
+          <input type="text" id="search-input" placeholder="全局搜索议题标题、正文、否决原因、最新原话或落实说明...">
         </div>
 
         <div style="display: flex; align-items: center; gap: 0.8rem;">
@@ -155,38 +170,64 @@
         <button class="btn-icon" onclick="window.dashboardApp.closeModal('modal-edit-decision')">✕</button>
       </div>
       <div class="modal-body">
-        <div style="display: flex; gap: 0.5rem; align-items: center; font-size: 0.8rem; color: var(--text-dim);">
-          <span class="chip" id="modal-topic-id">#id</span>
-          <span id="modal-topic-category">分类</span>
-        </div>
+        <!-- 并发冲突提示横幅 -->
+        <div id="modal-conflict-banner" class="conflict-banner" style="display: none;"></div>
 
-        <div class="form-group">
-          <label class="form-label">生命周期三态流转：</label>
-          <select class="form-select" id="form-lifecycle-status">
-            <option value="decided">🟢 已决策（双方定案形成不可推翻红线，不再重提）</option>
-            <option value="discussing">🟡 待讨论（技术细节、参数推敲或架构提案中）</option>
-            <option value="pending">🔴 待决策（存在方案分歧或卡点，等待拍板）</option>
-          </select>
+        <div style="display: flex; gap: 0.5rem; align-items: center; font-size: 0.8rem; color: var(--text-dim); margin-bottom: 0.6rem;">
+          <span class="chip" id="modal-topic-id">#id</span>
+          <span class="chip" id="modal-topic-version">v1</span>
+          <span id="modal-topic-category">分类</span>
         </div>
 
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
           <div class="form-group">
-            <label class="form-label">决策状态：</label>
-            <input type="text" class="form-input" id="form-decision-status" placeholder="如：已定案、你已明确同意">
+            <label class="form-label">工作流状态 (Workflow)：</label>
+            <select class="form-select" id="form-workflow-state">
+              <option value="decided">🟢 已决策（定案红线，双方拍板）</option>
+              <option value="discussing">🟡 待讨论（技术细节、参数推敲）</option>
+              <option value="pending">🔴 待决策（等待拍板决断）</option>
+            </select>
           </div>
           <div class="form-group">
-            <label class="form-label">实现现状：</label>
-            <input type="text" class="form-input" id="form-impl-status" placeholder="如：未实现、已有原型、已发布">
+            <label class="form-label">决策结论 (Outcome)：</label>
+            <select class="form-select" id="form-decision-outcome" onchange="window.dashboardApp.onOutcomeChanged()">
+              <option value="accepted">🟢 采纳接受 (Accepted)</option>
+              <option value="rejected">❌ 明确否决方案 (Rejected)</option>
+              <option value="deferred">⏳ 推迟再议 (Deferred)</option>
+              <option value="superseded">📦 已被新方案替代 (Superseded)</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- 否决原因（仅在 outcome === rejected 时突出显示） -->
+        <div class="form-group" id="group-rejection-reason" style="display: none;">
+          <label class="form-label" style="color: #ef4444; font-weight: 700;">❌ 否决原因与重新讨论前提（约束 Agent 不得重提）：</label>
+          <textarea class="form-textarea" id="form-rejection-reason" rows="2" placeholder="记录为何否决该方案、在何种客观条件变化下方可重提..."></textarea>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+          <div class="form-group">
+            <label class="form-label">代码实现状态：</label>
+            <select class="form-select" id="form-impl-state">
+              <option value="not_started">未开始 (not_started)</option>
+              <option value="in_progress">进行中 (in_progress)</option>
+              <option value="implemented">已实现 (implemented)</option>
+              <option value="verified">🧪 已核验通过 (verified)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">实现 Commit Hash / PR：</label>
+            <input type="text" class="form-input" id="form-impl-commit" placeholder="如：d7aefe5 或 PR #12">
           </div>
         </div>
 
         <div class="form-group">
-          <label class="form-label">💡 用户意见（最新用户答复原话，将追加为新轮次）：</label>
-          <textarea class="form-textarea" id="form-user-opinion" rows="3" placeholder="录入用户明确意见或决策指示原话..."></textarea>
+          <label class="form-label">💡 用户意见（最新原话，将作为第 n 轮决策追加）：</label>
+          <textarea class="form-textarea" id="form-user-opinion" rows="3" placeholder="录入用户明确意见或指示原话..."></textarea>
         </div>
 
         <div class="form-group">
-          <label class="form-label">🤖 团队/Agent 答复（落地说明与排期）：</label>
+          <label class="form-label">🤖 团队/Agent 答复（落实说明与排期）：</label>
           <textarea class="form-textarea" id="form-agent-reply" rows="3" placeholder="录入团队技术回应与落地承诺..."></textarea>
         </div>
 
@@ -197,7 +238,27 @@
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" onclick="window.dashboardApp.closeModal('modal-edit-decision')">取消</button>
-        <button class="btn btn-primary" onclick="window.dashboardApp.submitDecision()">确定决策并生成 Git Commit</button>
+        <button class="btn btn-primary" id="btn-submit-decision" onclick="window.dashboardApp.submitDecision()">确定决策并生成 Git Commit</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Agent Context Export -->
+  <div class="modal-backdrop" id="modal-agent-context">
+    <div class="modal-card" style="max-width: 750px; width: 90%;">
+      <div class="modal-header">
+        <h3>🤖 面向 Agent 的治理上下文 Prompt 导出</h3>
+        <button class="btn-icon" onclick="window.dashboardApp.closeModal('modal-agent-context')">✕</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size: 0.82rem; color: var(--text-dim); margin-bottom: 0.8rem;">
+          以下是提取自台账的有效决策与已否决红线约束，可直接复制粘贴到 Agent 的 System Prompt 或任务指令中，确保 Agent 严格遵守拍板结论并不再重提已被否决方案。
+        </p>
+        <textarea class="form-textarea" id="agent-context-markdown" rows="14" readonly style="font-family: var(--font-mono); font-size: 0.78rem;"></textarea>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="window.dashboardApp.closeModal('modal-agent-context')">关闭</button>
+        <button class="btn btn-primary" onclick="window.dashboardApp.copyAgentContext()">📋 复制 Markdown Prompt</button>
       </div>
     </div>
   </div>
