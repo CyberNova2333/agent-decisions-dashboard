@@ -47,6 +47,16 @@ class DashboardServer:
         topics_list = []
         try:
             db_topics = self.db.get_all_topics()
+            if not db_topics and self.config.metadata_json_path.exists():
+                try:
+                    data = json.loads(self.config.metadata_json_path.read_text(encoding="utf-8"))
+                    topics_list = data.get("topics", [])
+                    for t in topics_list:
+                        self.db.upsert_topic(t)
+                    return topics_list
+                except Exception:
+                    pass
+
             for r in db_topics:
                 topic_id = r["id"]
                 md_file = self.config.decisions_dir / f"{topic_id}.md"
