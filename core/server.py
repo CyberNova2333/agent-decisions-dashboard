@@ -385,16 +385,36 @@ def make_handler(server: DashboardServer):
                     self._send_json(500, {"error": "restore_failed", "message": str(e)})
                 return
 
-            # 4. 关联实现证据与核验 (P2-E)
+            # 4. 关联实现证据与核验 (P2-E, F11)
             elif path.startswith("/api/topic/") and path.endswith("/verify"):
                 raw_id = path.replace("/api/topic/", "").replace("/verify", "").strip()
-                commit_hash = data.get("impl_commit", "").strip()
-                verifier = data.get("verifier", "Agent/CI").strip()
-                test_summary = data.get("test_summary", "").strip()
-                mark_verified = bool(data.get("mark_verified", True))
-                if not commit_hash:
-                    self._send_json(400, {"error": "missing_commit", "message": "必须提供实现代码的 Git 提交 Hash"})
+                commit_hash = data.get("impl_commit")
+                if not isinstance(commit_hash, str) or not commit_hash.strip():
+                    self._send_json(400, {"error": "missing_commit", "message": "必须提供实现代码的 Git 提交 Hash (非空字符串)"})
                     return
+                commit_hash = commit_hash.strip()
+
+                if "mark_verified" in data:
+                    raw_mv = data["mark_verified"]
+                    if not isinstance(raw_mv, bool):
+                        self._send_json(400, {"error": "invalid_mark_verified", "message": "mark_verified 必须为布尔值 (true/false)"})
+                        return
+                    mark_verified = raw_mv
+                else:
+                    mark_verified = True
+
+                verifier = data.get("verifier", "Agent/CI")
+                if not isinstance(verifier, str):
+                    self._send_json(400, {"error": "invalid_verifier", "message": "verifier 必须为字符串"})
+                    return
+                verifier = verifier.strip()
+
+                test_summary = data.get("test_summary", "")
+                if not isinstance(test_summary, str):
+                    self._send_json(400, {"error": "invalid_test_summary", "message": "test_summary 必须为字符串"})
+                    return
+                test_summary = test_summary.strip()
+
                 try:
                     res = server.agent.record_verification(
                         topic_id=raw_id,
