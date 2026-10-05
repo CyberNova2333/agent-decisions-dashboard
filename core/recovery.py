@@ -6,6 +6,7 @@ Agent Decisions Dashboard - Recovery & Consistency Engine
 """
 
 import re
+import os
 import json
 import hashlib
 from pathlib import Path
@@ -362,8 +363,10 @@ class RecoveryManager:
 
         self.config.metadata_json_path.parent.mkdir(parents=True, exist_ok=True)
         import datetime
-        self.config.metadata_json_path.write_text(json.dumps({
+        import uuid
+        meta_content = json.dumps({
             "updated_at": datetime.datetime.now().isoformat(),
             "total_topics": len(meta_list),
             "topics": meta_list
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        }, ensure_ascii=False, indent=2)
+        self.config.metadata_json_path.write_text(meta_content, encoding="utf-8")
