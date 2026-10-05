@@ -119,13 +119,32 @@ def make_handler(server: DashboardServer):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=str(server.web_dir), **kwargs)
 
+        def _get_allowed_origin(self) -> Optional[str]:
+            origin = self.headers.get("Origin")
+            if not origin:
+                return None
+            parsed_origin = urllib.parse.urlparse(origin)
+            host = parsed_origin.hostname
+            allowed_hosts = {"localhost", "127.0.0.1", server.host}
+            if host in allowed_hosts:
+                return origin
+            return None
+
         def end_headers(self):
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Request-ID, X-Expected-Version")
+            allowed_origin = self._get_allowed_origin()
+            if allowed_origin:
+                self.send_header("Access-Control-Allow-Origin", allowed_origin)
+                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+                self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Request-ID, X-Expected-Version")
+                self.send_header("Vary", "Origin")
             super().end_headers()
 
         def do_OPTIONS(self):
+            origin = self.headers.get("Origin")
+            if origin and not self._get_allowed_origin():
+                self.send_response(403)
+                super().end_headers()
+                return
             self.send_response(200)
             self.end_headers()
 
@@ -244,17 +263,42 @@ def make_handler(server: DashboardServer):
         def do_POST(self):
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
-            length = int(self.headers.get("Content-Length", 0))
+
+            # 跨站请求防御：若带有非受信任的 Origin，阻断写请求 (R12)
+            origin = self.headers.get("Origin")
+            if origin and not self._get_allowed_origin():
+                self._send_json(403, {"error": "forbidden_origin", "message": f"跨站请求已被本地安全策略阻断: {origin}"})
+                return
+
+            cl_header = self.headers.get("Content-Length")
+            try:
+                length = int(cl_header) if cl_header is not None else 0
+                if length < 0:
+                    self._send_json(400, {"error": "bad_request", "message": "Content-Length 必须为非负整数"})
+                    return
+            except (ValueError, TypeError):
+                self._send_json(400, {"error": "bad_request", "message": "Content-Length 格式非法，必须为整数"})
+                return
 
             if length > MAX_BODY_SIZE:
                 self._send_json(413, {"error": "payload_too_large", "message": f"请求体超限 (最大允许 {MAX_BODY_SIZE} 字节)"})
                 return
 
-            raw_body = self.rfile.read(length).decode("utf-8") if length > 0 else "{}"
+            try:
+                raw_bytes = self.rfile.read(length) if length > 0 else b"{}"
+                raw_body = raw_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                self._send_json(400, {"error": "bad_encoding", "message": "请求体必须为 UTF-8 编码格式"})
+                return
+
             try:
                 data = json.loads(raw_body) if raw_body else {}
             except Exception as e:
                 self._send_json(400, {"error": "bad_json", "message": f"无效的 JSON 数据: {e}"})
+                return
+
+            if not isinstance(data, dict):
+                self._send_json(400, {"error": "bad_json", "message": "顶层 JSON 数据必须是对象 (Object)"})
                 return
 
             request_id = self.headers.get("X-Request-ID") or data.get("request_id")
