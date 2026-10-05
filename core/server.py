@@ -137,7 +137,14 @@ def make_handler(server: DashboardServer):
                 if srv_host:
                     allowed_hosts.add(srv_host)
                 if host in allowed_hosts:
-                    return origin
+                    origin_port = parsed_origin.port or (443 if parsed_origin.scheme == "https" else 80)
+                    srv_port = getattr(server, "port", None) or getattr(server.config, "port", 8765)
+                    if origin_port == srv_port:
+                        return origin
+
+                    explicit_allowed = getattr(server.config, "allowed_origins", None) or []
+                    if origin in explicit_allowed:
+                        return origin
             except Exception:
                 pass
             return None
@@ -279,12 +286,6 @@ def make_handler(server: DashboardServer):
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
 
-            # 跨站请求防御：若带有非受信任的 Origin，阻断写请求 (R12)
-            origin = self.headers.get("Origin")
-            if origin and not self._get_allowed_origin():
-                self._send_json(403, {"error": "forbidden_origin", "message": f"跨站请求已被本地安全策略阻断: {origin}"})
-                return
-
             cl_header = self.headers.get("Content-Length")
             try:
                 length = int(cl_header) if cl_header is not None else 0
@@ -301,6 +302,16 @@ def make_handler(server: DashboardServer):
 
             try:
                 raw_bytes = self.rfile.read(length) if length > 0 else b"{}"
+            except Exception:
+                raw_bytes = b"{}"
+
+            # 跨站请求防御：若带有非受信任的 Origin，阻断写请求 (R12, F10)
+            origin = self.headers.get("Origin")
+            if origin and not self._get_allowed_origin():
+                self._send_json(403, {"error": "forbidden_origin", "message": f"跨站请求已被本地安全策略阻断: {origin}"})
+                return
+
+            try:
                 raw_body = raw_bytes.decode("utf-8")
             except UnicodeDecodeError:
                 self._send_json(400, {"error": "bad_encoding", "message": "请求体必须为 UTF-8 编码格式"})
