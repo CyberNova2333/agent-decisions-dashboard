@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-decisions-dashboard"
+version = "1.0.0"
+description = "通用 AI Agent 结对编程架构决策台账与 Git 自动化治理看板"
+readme = "README.md"
+license = { text = "GPL-3.0-or-later" }
+authors = [
+    { name = "CyberNova", email = "rxe5bn7UxYVes4DH1Df6FY+CyberNova@noreply.cnb.cool" }
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Documentation",
+    "Topic :: Software Development :: Version Control :: Git"
+]
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+agent-dashboard = "core.server:main"
