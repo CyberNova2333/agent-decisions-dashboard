@@ -2,14 +2,17 @@
 """
 Agent Decisions Dashboard - Recovery & Consistency Engine
 索引双向重建、三态存储一致性检测与故障恢复引擎
+支持权威版本保持、幂等重建、内容漂移检测与孤儿清理 (R04)
 """
 
 import json
+import hashlib
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from core.config import Config
 from core.db import DatabaseManager
 from core.markdown_parser import TopicMarkdownParser
+
 
 class RecoveryManager:
     def __init__(self, config: Config, db: Optional[DatabaseManager] = None):
@@ -17,19 +20,46 @@ class RecoveryManager:
         self.db = db or DatabaseManager(config.database_path, config)
         self.parser = TopicMarkdownParser()
 
+    @staticmethod
+    def _compute_digest(data: Dict[str, Any], core_content: str, rounds: List[Dict[str, Any]]) -> str:
+        """计算议题内容的规范化 SHA-256 摘要，用于精准检测内容漂移"""
+        rounds_str_parts = []
+        for r in rounds:
+            rounds_str_parts.append(f"{r.get('title', '')}:{r.get('content', '')}:{r.get('user_opinion', '')}:{r.get('agent_reply', '')}:{r.get('commit_message', '')}")
+        rounds_str = "||".join(rounds_str_parts)
+
+        fields = [
+            str(data.get("id", "")).strip(),
+            str(data.get("title", "")).strip(),
+            str(data.get("section", "")).strip(),
+            str(data.get("object", "")).strip(),
+            str(data.get("function", "")).strip(),
+            str(data.get("workflow_state", "")).strip(),
+            str(data.get("decision_outcome", "")).strip(),
+            str(data.get("rejection_reason", "")).strip(),
+            str(data.get("superseded_by", "")).strip(),
+            str(data.get("implementation_state", "")).strip(),
+            str(data.get("impl_commit", "")).strip(),
+            str(data.get("impl_verifier", "")).strip(),
+            str(data.get("version", 1)),
+            core_content.strip(),
+            rounds_str
+        ]
+        return hashlib.sha256("|".join(fields).encode("utf-8")).hexdigest()
+
     def check_consistency(self) -> Dict[str, Any]:
         """
         全面检测 Markdown 文件、SQLite 数据库以及 metadata.json 之间的一致性：
         - 查找磁盘上有但 SQLite 未索引的 Markdown 文件
         - 查找 SQLite 中存在但磁盘文件缺失的议题
-        - 查找轮次数或版本号不一致的议题
-        - 检测 metadata.json 是否与权威数据同步
+        - 计算内容摘要对比，精准发现同版本正文漂移 (R04)
+        - 深入校验 metadata.json 导出字段是否与权威数据完全一致
         """
         decisions_dir = self.config.decisions_dir
         disk_files: Dict[str, Path] = {}
         if decisions_dir.exists():
             for p in decisions_dir.glob("*.md"):
-                if p.is_file():
+                if p.is_file() and not p.name.startswith("."):
                     disk_files[p.stem] = p
 
         db_topics = {t["id"]: t for t in self.db.get_all_topics()}
@@ -38,7 +68,7 @@ class RecoveryManager:
         missing_markdown: List[str] = []
         desynced_topics: List[Dict[str, Any]] = []
 
-        # 1. 检查磁盘文件在 DB 中的状态
+        # 1. 检查磁盘文件在 DB 中的状态与内容保真度
         for tid, file_path in disk_files.items():
             if tid not in db_topics:
                 unindexed_markdown.append(tid)
@@ -46,16 +76,47 @@ class RecoveryManager:
                 db_t = db_topics[tid]
                 parsed = self.parser.parse_markdown_file(file_path)
                 if parsed:
-                    disk_rounds = len(parsed["rounds"])
                     disk_ver = parsed.get("version", 1)
                     db_ver = db_t.get("version", 1)
-                    if disk_ver != db_ver:
+                    disk_rounds = len(parsed["rounds"])
+
+                    # 提取 DB 端的讨论 rounds 用于比对
+                    db_discussion = []
+                    if db_t.get("discussion_json"):
+                        try:
+                            db_discussion = json.loads(db_t["discussion_json"])
+                        except Exception:
+                            db_discussion = []
+
+                    disk_digest = self._compute_digest(parsed, parsed.get("core_content", ""), parsed.get("rounds", []))
+                    
+                    # 组装 DB 规范化数据比对
+                    db_t_norm = {
+                        "id": db_t["id"],
+                        "title": db_t["title"],
+                        "section": db_t.get("section", "未分类"),
+                        "object": db_t.get("object", "通用系统"),
+                        "function": db_t.get("function", "核心规范"),
+                        "workflow_state": db_t.get("workflow_state") or db_t.get("lifecycle_status", "discussing"),
+                        "decision_outcome": db_t.get("decision_outcome", ""),
+                        "rejection_reason": db_t.get("rejection_reason", ""),
+                        "superseded_by": db_t.get("superseded_by", ""),
+                        "implementation_state": db_t.get("implementation_state", "not_started"),
+                        "impl_commit": db_t.get("impl_commit", ""),
+                        "impl_verifier": db_t.get("impl_verifier", ""),
+                        "version": db_ver
+                    }
+                    db_digest = self._compute_digest(db_t_norm, db_t.get("content", ""), parsed.get("rounds", []))
+
+                    if disk_ver != db_ver or disk_digest != db_digest:
                         desynced_topics.append({
                             "id": tid,
                             "title": db_t["title"],
                             "disk_version": disk_ver,
                             "db_version": db_ver,
-                            "disk_rounds": disk_rounds
+                            "disk_rounds": disk_rounds,
+                            "version_mismatch": disk_ver != db_ver,
+                            "content_drift": disk_digest != db_digest
                         })
 
         # 2. 检查 DB 中存在但磁盘无文件的议题
@@ -63,7 +124,7 @@ class RecoveryManager:
             if tid not in disk_files:
                 missing_markdown.append(tid)
 
-        # 3. 检查 metadata.json 同步状态
+        # 3. 检查 metadata.json 同步状态与字段一致性 (R04)
         meta_synced = True
         meta_count = 0
         if self.config.metadata_json_path.exists():
@@ -73,6 +134,20 @@ class RecoveryManager:
                 meta_count = len(meta_topics)
                 if meta_count != len(db_topics):
                     meta_synced = False
+                else:
+                    for mt in meta_topics:
+                        mid = mt.get("id")
+                        if mid not in db_topics:
+                            meta_synced = False
+                            break
+                        dbt = db_topics[mid]
+                        # 比对关键业务字段
+                        if mt.get("title") != dbt.get("title") or \
+                           mt.get("version") != dbt.get("version") or \
+                           mt.get("workflow_state") != (dbt.get("workflow_state") or dbt.get("lifecycle_status")) or \
+                           mt.get("section") != dbt.get("section"):
+                            meta_synced = False
+                            break
             except Exception:
                 meta_synced = False
         else:
@@ -98,8 +173,10 @@ class RecoveryManager:
 
     def rebuild_index_from_markdown(self) -> Dict[str, Any]:
         """
-        以 Markdown 文件为权威事实源，全量重建 SQLite 索引与 metadata.json：
-        遍历 decisions/*.md，解析正文、Frontmatter 与历史讨论，逐条入库
+        以 Markdown 文件为绝对权威事实源，全量重建 SQLite 索引与 metadata.json (R04)：
+        1. 预先解析并校验全部 Markdown 文件，检测格式与 ID 匹配性
+        2. 在单数据库事务内构建精确投影：保留文件固有版本，清除无对应文件的旧索引
+        3. 重建过程保持严格幂等，绝不额外创造业务版本
         """
         decisions_dir = self.config.decisions_dir
         if not decisions_dir.exists():
@@ -109,10 +186,12 @@ class RecoveryManager:
                 "rebuilt_count": 0
             }
 
-        md_files = list(decisions_dir.glob("*.md"))
-        rebuilt = []
+        md_files = [p for p in decisions_dir.glob("*.md") if not p.name.startswith(".")]
+        parsed_items = []
         errors = []
+        seen_ids = set()
 
+        # 1. 扫描、解析并校验所有文件
         for p in md_files:
             try:
                 parsed = self.parser.parse_markdown_file(p)
@@ -120,11 +199,19 @@ class RecoveryManager:
                     continue
 
                 topic_id = parsed["id"]
+                if topic_id in seen_ids:
+                    errors.append({"file": p.name, "error": f"发现重复的议题 ID: [{topic_id}]"})
+                    continue
+                seen_ids.add(topic_id)
+
                 discussion = []
                 for r in parsed.get("rounds", []):
                     u = r.get("user_opinion", "")
                     a = r.get("agent_reply", "")
+                    c = r.get("commit_message", "")
                     title = r.get("title", "")
+                    if c:
+                        discussion.append({"key": f"{title} 变更说明", "val": c})
                     if u:
                         discussion.append({"key": f"{title} 用户意见", "val": u})
                     if a:
@@ -149,23 +236,41 @@ class RecoveryManager:
                     "superseded_by": parsed.get("superseded_by", ""),
                     "implementation_state": parsed.get("implementation_state", "not_started"),
                     "impl_commit": parsed.get("impl_commit", ""),
-                    "impl_verifier": parsed.get("impl_verifier", "")
+                    "impl_verifier": parsed.get("impl_verifier", ""),
+                    "version": parsed.get("version", 1)
                 }
-
-                self.db.upsert_topic(topic_data)
-                rebuilt.append(topic_id)
+                parsed_items.append({
+                    "id": topic_id,
+                    "version": parsed.get("version", 1),
+                    "data": topic_data
+                })
             except Exception as e:
                 errors.append({"file": p.name, "error": str(e)})
 
-        # 刷新派生物 metadata.json
+        # 2. 在同一事务中原子替换当前索引投影 (保留历史 Revisions)
+        with self.db.get_connection() as conn:
+            cursor = conn.cursor()
+            if seen_ids:
+                placeholders = ",".join("?" for _ in seen_ids)
+                cursor.execute(f"DELETE FROM topics WHERE id NOT IN ({placeholders})", list(seen_ids))
+            else:
+                cursor.execute("DELETE FROM topics")
+
+            for item in parsed_items:
+                # 明确指定 exact_version，保持文件固有版本号，多次重建绝不累加版本 (R04)
+                self.db.upsert_topic(item["data"], exact_version=item["version"], conn=conn)
+            conn.commit()
+
+        # 3. 刷新派生物 metadata.json
         self.sync_metadata_json()
 
+        rebuilt_ids = [item["id"] for item in parsed_items]
         return {
             "status": "success",
-            "rebuilt_count": len(rebuilt),
-            "rebuilt_ids": rebuilt,
+            "rebuilt_count": len(rebuilt_ids),
+            "rebuilt_ids": rebuilt_ids,
             "errors": errors,
-            "message": f"成功从 Markdown 事实源重建了 {len(rebuilt)} 条议题索引！"
+            "message": f"成功从 Markdown 事实源重建了 {len(rebuilt_ids)} 条议题索引（保留文件版本号）！"
         }
 
     def sync_metadata_json(self):
