@@ -29,3 +29,13 @@ dependencies = []
 
 [project.scripts]
 agent-dashboard = "core.server:main"
+
+[tool.setuptools]
+packages = ["core", "core.web"]
+
+[tool.setuptools.package-dir]
+"core.web" = "web"
+
+[tool.setuptools.package-data]
+"core.web" = ["*"]
+
