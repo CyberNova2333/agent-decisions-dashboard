@@ -15,7 +15,7 @@
       "priority": "最高",
       "summary": "在人机协同或多 Agent 复杂长程编程任务中，传统的集中式大文档容易产生多轮对话被覆盖、历史结论被篡改等痛点。",
       "rounds_count": 2,
-      "last_user_opinion": "确认方案，必须确保零外部重量级依赖，支持单机快速启动与 Git 离线回溯。",
+      "last_user_opinion": "要求系统保持极简轻量，采用标准库实现，支持单机快速启动与离线追溯。",
       "last_agent_reply": "已实现基于 Python 标准库的轻量服务器与自动化语义提交引擎。",
       "updated_at": "2026-10-05T14:00:00"
     },
@@ -32,7 +32,7 @@
       "priority": "高",
       "summary": "决策台账需要保证离线可用性、轻量级部署以及历史版本快照回退能力。",
       "rounds_count": 1,
-      "last_user_opinion": "做成git仓库或者sqlite数据库那样可持久化和可回溯的。",
+      "last_user_opinion": "建议引入嵌入式数据库支持元数据结构化检索与历史快照回退。",
       "last_agent_reply": "已实现 SQLite 存储引擎与基于 Revision 的不可篡改快照链。",
       "updated_at": "2026-10-05T11:30:00"
     }
