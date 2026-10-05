@@ -6,6 +6,7 @@ Agent Decisions Dashboard - Decision Service
 
 import os
 import shutil
+import sqlite3
 import json
 import uuid
 import hashlib
@@ -907,10 +908,21 @@ class DecisionService:
 
         target_ids = {t["id"] for t in target_topics}
 
-        # 备份数据库文件与当前 live 文件，以实现真正的原子性故障回滚 (U06, U07)
+        # 备份数据库文件与当前 live 文件，以实现真正的原子性故障回滚 (U06, U07, R06, R12)
         db_path = self.config.database_path
         db_backup = db_path.with_suffix(f".bak.{uuid.uuid4().hex[:8]}")
-        shutil.copy2(db_path, db_backup)
+        bak_conn = None
+        try:
+            bak_conn = sqlite3.connect(str(db_backup))
+            with self.db.get_connection() as live_conn:
+                live_conn.backup(bak_conn)
+        except Exception:
+            shutil.copy2(db_path, db_backup)
+        finally:
+            if bak_conn is not None:
+                bak_conn.close()
+
+        orig_metadata_bytes = self.config.metadata_json_path.read_bytes() if self.config.metadata_json_path.exists() else None
 
         live_backups = {}
         if self.config.decisions_dir.exists():
@@ -993,10 +1005,24 @@ class DecisionService:
 
             return res
         except Exception:
-            # 全流程故障还原补偿 (U06, U07)
-            # 1. 还原数据库
+            # 全流程故障还原补偿 (U06, U07, R06, R12)
+            # 1. 还原数据库 (优先通过 SQLite Backup API 还原, 兼顾 WAL 模式)
             if db_backup.exists():
-                shutil.copy2(db_backup, db_path)
+                restored_via_backup_api = False
+                bak_conn = None
+                try:
+                    bak_conn = sqlite3.connect(str(db_backup))
+                    with self.db.get_connection() as live_conn:
+                        bak_conn.backup(live_conn)
+                    restored_via_backup_api = True
+                except Exception:
+                    pass
+                finally:
+                    if bak_conn is not None:
+                        bak_conn.close()
+                if not restored_via_backup_api:
+                    shutil.copy2(db_backup, db_path)
+
             # 2. 还原 live 目录下的所有文件
             for p in self.config.decisions_dir.glob("*.md"):
                 if p.name not in live_backups:
@@ -1006,6 +1032,7 @@ class DecisionService:
                         pass
             for fname, content in live_backups.items():
                 (self.config.decisions_dir / fname).write_bytes(content)
+
             # 3. 清理本轮归档生成的多余文件
             for archive_target, _ in archived_moves:
                 if archive_target.exists():
@@ -1013,6 +1040,15 @@ class DecisionService:
                         archive_target.unlink()
                     except OSError:
                         pass
+
+            # 4. 还原 metadata.json (R06)
+            if orig_metadata_bytes is not None:
+                self.config.metadata_json_path.write_bytes(orig_metadata_bytes)
+            elif self.config.metadata_json_path.exists():
+                try:
+                    self.config.metadata_json_path.unlink()
+                except OSError:
+                    pass
             raise
         finally:
             if db_backup.exists():
