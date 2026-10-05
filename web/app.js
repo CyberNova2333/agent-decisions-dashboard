@@ -1,5 +1,6 @@
 // Agent Decisions Dashboard Client Application
-// 支持正交三态流转、否决红线约束、并发乐观锁冲突保护与单议题精准回溯
+// Frontend fix 2026-10-05: explicit conflict review, metadata preservation, safe DOM events.
+// Backend transaction / parser / restore defects require separate fixes.
 (function () {
   "use strict";
 
@@ -9,7 +10,9 @@
     settledDecisions: [],
     openQuestions: [],
     changelog: [],
-    topicsDetailCache: {},
+    topicsDetailCache: Object.create(null),
+    editSession: null,
+    draftsByTopic: new Map(),
     selectedTopicId: null,
     viewMode: "grid",
     currentView: "topics",
@@ -22,14 +25,18 @@
     isServerOnline: false,
   };
 
-  // Toast Notification
+  // Server/user strings must never be interpreted as HTML or executable JS.
   function showToast(message, type = "success") {
     const container = document.getElementById("toast-container");
     if (!container) return;
+    const safeType = ["success", "warning", "error"].includes(type) ? type : "error";
     const toast = document.createElement("div");
-    toast.className = `toast ${type}`;
-    const icon = type === "success" ? "✅" : (type === "warning" ? "⚠️" : "❌");
-    toast.innerHTML = `<span>${icon}</span><span>${message}</span>`;
+    toast.className = `toast ${safeType}`;
+    const icon = document.createElement("span");
+    icon.textContent = safeType === "success" ? "✅" : safeType === "warning" ? "⚠️" : "❌";
+    const text = document.createElement("span");
+    text.textContent = String(message ?? "");
+    toast.append(icon, text);
     container.appendChild(toast);
     setTimeout(() => {
       toast.style.opacity = "0";
@@ -37,14 +44,20 @@
     }, 4500);
   }
 
-  function escapeHtml(str) {
-    if (!str) return "";
-    return str
+  function escapeHtml(value) {
+    return String(value ?? "")
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#039;");
+  }
+
+  function topicPath(topicId) {
+    const id = String(topicId ?? "");
+    // Matches the supplied backend's topic-ID contract.
+    if (!/^[a-zA-Z0-9_-]+$/.test(id)) throw new Error("议题 ID 无效");
+    return `/api/topic/${encodeURIComponent(id)}`;
   }
 
   // Two-Stage Loading: 1. Load Metadata List
@@ -53,7 +66,8 @@
       const res = await fetch("/api/topics", { cache: "no-store" });
       if (res.ok) {
         const data = await res.json();
-        state.topicsMeta = data.topics || [];
+        if (!Array.isArray(data.topics)) throw new Error("议题列表响应格式无效");
+        state.topicsMeta = data.topics;
         state.settledDecisions = data.settled_decisions || [];
         state.openQuestions = data.open_questions || [];
         state.changelog = data.changelog || [];
@@ -63,14 +77,15 @@
         updateServerStatus(true);
         renderTopicCards();
         updateSidebarCounts();
-        return;
+        return true;
       }
     } catch (e) {
       console.warn("Failed to load /api/topics, fallback to offline data", e);
     }
 
-    // Offline fallback
-    if (window.DASHBOARD_DEFAULT_DATA) {
+    // A failed refresh must not replace already loaded data with demo records.
+    updateServerStatus(false);
+    if (!state.topicsMeta.length && window.DASHBOARD_DEFAULT_DATA) {
       const def = window.DASHBOARD_DEFAULT_DATA;
       state.topicsMeta = def.topics || [];
       state.settledDecisions = def.settled_decisions || [];
@@ -81,6 +96,7 @@
       renderTopicCards();
       updateSidebarCounts();
     }
+    return false;
   }
 
   function applyConfig(cfg) {
@@ -112,9 +128,9 @@
         `;
         cfg.categories.objects.forEach((obj) => {
           html += `
-            <span class="filter-pill" data-type="object" data-val="${obj}">
-              <span>${obj}</span>
-              <span class="nav-badge" data-obj-badge="${obj}">0</span>
+            <span class="filter-pill" data-type="object" data-val="${escapeHtml(obj)}">
+              <span>${escapeHtml(obj)}</span>
+              <span class="nav-badge" data-obj-badge="${escapeHtml(obj)}">0</span>
             </span>
           `;
         });
@@ -146,7 +162,7 @@
     }
 
     try {
-      const res = await fetch(`/api/topic/${topicId}`, { cache: "no-store" });
+      const res = await fetch(topicPath(topicId), { cache: "no-store" });
       if (res.ok) {
         const detail = await res.json();
         state.topicsDetailCache[topicId] = detail;
@@ -234,7 +250,7 @@
           <div style="font-size: 2.5rem; margin-bottom: 0.8rem;">🔍</div>
           <h3>未找到匹配的议题</h3>
           <p style="margin-top: 0.4rem; font-size: 0.85rem;">请尝试调整筛选条件或搜索关键词</p>
-          <button class="btn btn-secondary" style="margin-top: 1rem;" onclick="window.dashboardApp.resetFilters()">重置所有筛选</button>
+          <button class="btn btn-secondary" style="margin-top: 1rem;" data-action="reset">重置所有筛选</button>
         </div>
       `;
       return;
@@ -274,19 +290,19 @@
         }
 
         return `
-        <div class="topic-card" id="card-${t.id}">
+        <div class="topic-card" id="card-${escapeHtml(t.id)}">
           <div class="card-meta-line">
-            <span class="badge ${lcInfo.badge_class}">${lcInfo.badge}</span>
+            <span class="badge ${escapeHtml(lcInfo.badge_class)}">${escapeHtml(lcInfo.badge)}</span>
             ${isRejected ? `<span class="badge badge-rejected">❌ 方案已否决</span>` : ""}
             ${implBadge}
-            <span class="chip">#${t.id}</span>
-            <span class="chip">v${ver}</span>
+            <span class="chip">#${escapeHtml(t.id)}</span>
+            <span class="chip">v${escapeHtml(ver)}</span>
             <span class="chip">${escapeHtml(t.object || "通用")}</span>
             <span class="chip" style="color: var(--color-primary);">${escapeHtml(t.function || "规范")}</span>
-            <span class="chip" style="margin-left: auto;">第 ${rounds} 轮讨论</span>
+            <span class="chip" style="margin-left: auto;">第 ${escapeHtml(rounds)} 轮讨论</span>
           </div>
 
-          <h3 class="card-title" onclick="window.dashboardApp.toggleCard('${t.id}')">${escapeHtml(t.title)}</h3>
+          <h3 class="card-title" data-action="toggle" data-topic-id="${escapeHtml(t.id)}">${escapeHtml(t.title)}</h3>
           
           <div class="card-summary">
             ${renderMarkdown(t.summary ? t.summary + "..." : "")}
@@ -295,13 +311,13 @@
           ${rejectionHtml}
 
           <!-- Dynamic Markdown body -->
-          <div id="detail-body-${t.id}" style="display: none; border-top: 1px dashed var(--border-subtle); padding-top: 0.8rem;"></div>
+          <div id="detail-body-${escapeHtml(t.id)}" style="display: none; border-top: 1px dashed var(--border-subtle); padding-top: 0.8rem;"></div>
 
           <!-- Latest Discussion -->
           <div class="discussion-box">
             <div class="discussion-title">
-              <span>💬 最新决策记录（第 ${rounds} 轮）</span>
-              <button class="btn btn-secondary" style="font-size: 0.72rem; padding: 0.2rem 0.5rem;" onclick="window.dashboardApp.openEditModal('${t.id}')">✏️ 确定决策</button>
+              <span>💬 最新决策记录（第 ${escapeHtml(rounds)} 轮）</span>
+              <button class="btn btn-secondary" style="font-size: 0.72rem; padding: 0.2rem 0.5rem;" data-action="edit" data-topic-id="${escapeHtml(t.id)}">✏️ 确定决策</button>
             </div>
             <div class="discussion-row">
               <div class="discussion-label">💡 用户意见：</div>
@@ -320,13 +336,13 @@
           </div>
 
           <div class="card-footer">
-            <span style="font-size: 0.72rem; color: var(--text-muted);">decisions/${t.id}.md</span>
+            <span style="font-size: 0.72rem; color: var(--text-muted);">decisions/${escapeHtml(t.id)}.md</span>
             <div style="display: flex; gap: 0.4rem;">
-              <button class="btn btn-secondary" onclick="window.dashboardApp.copyCitation('${escapeHtml(t.title)}', '${t.id}')">🔗 引用</button>
-              <button class="btn btn-secondary" onclick="window.dashboardApp.toggleCard('${t.id}')">
-                <span id="expand-btn-${t.id}">展开详情</span>
+              <button class="btn btn-secondary" data-action="copy" data-topic-id="${escapeHtml(t.id)}">🔗 引用</button>
+              <button class="btn btn-secondary" data-action="toggle" data-topic-id="${escapeHtml(t.id)}">
+                <span id="expand-btn-${escapeHtml(t.id)}">展开详情</span>
               </button>
-              <button class="btn btn-primary" onclick="window.dashboardApp.openEditModal('${t.id}')">✏️ 记录决策</button>
+              <button class="btn btn-primary" data-action="edit" data-topic-id="${escapeHtml(t.id)}">✏️ 记录决策</button>
             </div>
           </div>
         </div>
@@ -348,7 +364,7 @@
     }
 
     bodyEl.style.display = "block";
-    bodyEl.innerHTML = `<div style="color: var(--text-dim); text-align: center; padding: 1rem;">正在按需解析 ${topicId}.md 核心论述与历史讨论...</div>`;
+    bodyEl.innerHTML = `<div style="color: var(--text-dim); text-align: center; padding: 1rem;">正在按需解析 ${escapeHtml(topicId)}.md 核心论述与历史讨论...</div>`;
     if (btnSpan) btnSpan.innerText = "收起详情";
 
     const detail = await fetchTopicDetail(topicId);
@@ -429,146 +445,425 @@
     }
   }
 
-  function openEditModal(topicId) {
-    state.selectedTopicId = topicId;
-    const meta = state.topicsMeta.find((t) => t.id === topicId);
-    if (!meta) return;
+  const EDIT_FIELDS = [
+    { key: "workflow_state", id: "form-workflow-state", label: "工作流状态" },
+    { key: "decision_outcome", id: "form-decision-outcome", label: "决策结果" },
+    { key: "rejection_reason", id: "form-rejection-reason", label: "否决原因" },
+    { key: "implementation_state", id: "form-impl-state", label: "实现状态" },
+    { key: "impl_commit", id: "form-impl-commit", label: "实现 Commit / PR" },
+  ];
+  const DISCUSSION_FIELDS = [
+    { key: "new_user_opinion", id: "form-user-opinion" },
+    { key: "new_agent_reply", id: "form-agent-reply" },
+    { key: "commit_message", id: "form-commit-message" },
+  ];
+  const READ_ONLY_FIELDS = [
+    ["title", "标题"], ["object", "对象分类"], ["function", "功能分类"],
+    ["section", "章节"], ["priority", "优先级"],
+    ["impl_verifier", "核验人 / 核验证据"], ["superseded_by", "替代议题"],
+  ];
 
-    // 清空冲突提示
-    const conflictBanner = document.getElementById("modal-conflict-banner");
-    if (conflictBanner) {
-      conflictBanner.style.display = "none";
-      conflictBanner.innerHTML = "";
+  function valuesFromMeta(meta) {
+    const workflow = meta.workflow_state || meta.lifecycle_status || "discussing";
+    const outcome = meta.decision_outcome ?? (
+      String(meta.decision_status || "").includes("否决") ? "rejected" :
+        workflow === "decided" ? "accepted" : ""
+    );
+    return {
+      workflow_state: workflow,
+      decision_outcome: outcome,
+      rejection_reason: meta.rejection_reason || "",
+      implementation_state: meta.implementation_state || "not_started",
+      impl_commit: meta.impl_commit || "",
+    };
+  }
+
+  function rememberDraft(session) {
+    if (state.editSession !== session) return;
+    for (const field of [...EDIT_FIELDS, ...DISCUSSION_FIELDS]) {
+      session.draft[field.key] = document.getElementById(field.id).value;
     }
+  }
 
-    document.getElementById("modal-edit-title").innerText = `确定决策: ${meta.title}`;
-    document.getElementById("modal-topic-id").innerText = `#${meta.id}`;
-    document.getElementById("modal-topic-version").innerText = `v${meta.version || 1}`;
-    document.getElementById("modal-topic-category").innerText = `${meta.object || "通用"} · ${meta.function || "规范"}`;
-
-    const wf = meta.workflow_state || meta.lifecycle_status || "decided";
-    document.getElementById("form-workflow-state").value = wf;
-    
-    const outcome = meta.decision_outcome || ((meta.decision_status || "").includes("否决") ? "rejected" : "accepted");
-    document.getElementById("form-decision-outcome").value = outcome;
+  function writeEditForm(session) {
+    for (const field of [...EDIT_FIELDS, ...DISCUSSION_FIELDS]) {
+      const input = document.getElementById(field.id);
+      const value = String(session.draft[field.key] ?? "");
+      // Preserve unknown/empty values rather than silently choosing 'accepted'.
+      if (input.tagName === "SELECT" && !Array.from(input.options).some((o) => o.value === value)) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = value ? `${value}（保留原值）` : "未设置（保留原值）";
+        input.appendChild(option);
+      }
+      input.value = value;
+    }
     onOutcomeChanged();
+    updateModalInfo(session);
+    updateEditControls(session);
+  }
 
-    document.getElementById("form-rejection-reason").value = meta.rejection_reason || "";
-
-    const impl = meta.implementation_state || "not_started";
-    document.getElementById("form-impl-state").value = impl;
-    document.getElementById("form-impl-commit").value = meta.impl_commit || "";
-
-    const nextRound = (meta.rounds_count || 1) + 1;
-    document.getElementById("form-user-opinion").value = "";
+  function updateModalInfo(session) {
+    const meta = session.base;
+    document.getElementById("modal-edit-title").textContent = `确定决策: ${meta.title}`;
+    document.getElementById("modal-topic-id").textContent = `#${session.topicId}`;
+    document.getElementById("modal-topic-version").textContent = `v${meta.version ?? "未知"}`;
+    document.getElementById("modal-topic-category").textContent = `${meta.object || "通用"} · ${meta.function || "规范"}`;
+    const nextRound = (Number(meta.rounds_count) || 0) + 1;
     document.getElementById("form-user-opinion").placeholder = `输入第 ${nextRound} 轮的用户意见指示原话...`;
-
-    document.getElementById("form-agent-reply").value = "";
     document.getElementById("form-agent-reply").placeholder = `输入第 ${nextRound} 轮的落实说明与排期...`;
+  }
 
-    document.getElementById("form-commit-message").value = `第 ${nextRound} 轮决策：确认 [${meta.title}]`;
+  function updateEditControls(session) {
+    if (state.editSession !== session) return;
+    const button = document.getElementById("btn-submit-decision");
+    button.disabled = Boolean(session.saving || session.conflict || !state.isServerOnline);
+    button.textContent = session.saving ? "正在确认并保存..." : session.conflict ? "请先核对并合并冲突" :
+      session.uncertain ? "重试原请求（核对保存结果）" : "确定决策并生成 Git Commit";
+    // An uncertain request can only be replayed byte-for-byte, not edited in place.
+    for (const field of [...EDIT_FIELDS, ...DISCUSSION_FIELDS]) {
+      document.getElementById(field.id).disabled = Boolean(session.saving || session.conflict || session.uncertain);
+    }
+  }
 
+  function makeTextElement(tag, text) {
+    const element = document.createElement(tag);
+    element.textContent = String(text ?? "");
+    return element;
+  }
+
+  function bannerFor(session) {
+    if (state.editSession !== session) return null;
+    const banner = document.getElementById("modal-conflict-banner");
+    if (banner) {
+      banner.replaceChildren();
+      banner.style.display = "block";
+    }
+    return banner;
+  }
+
+  function clearEditBanner() {
+    const banner = document.getElementById("modal-conflict-banner");
+    if (banner) {
+      banner.replaceChildren();
+      banner.style.display = "none";
+    }
+  }
+
+  function renderUncertainBanner(session, message) {
+    const banner = bannerFor(session);
+    if (!banner) return;
+    banner.append(
+      makeTextElement("strong", "⚠️ 尚未确认保存结果"),
+      makeTextElement("p", `${message} 服务端可能已完成部分或全部写入。草稿和原请求 ID 已保留；下方按钮只会重放原请求，不会生成新的业务请求。请勿通过刷新页面后另行提交来重试。`)
+    );
+  }
+
+  function setConflict(session, currentVersion) {
+    // Crucially, do not advance base.version until the user reviews the merge.
+    session.request = null;
+    session.uncertain = false;
+    session.conflict = { currentVersion, latest: null };
+    delete state.topicsDetailCache[session.topicId];
+    renderConflictBanner(session);
+  }
+
+  function renderConflictBanner(session) {
+    const banner = bannerFor(session);
+    if (!banner || !session.conflict) return;
+    banner.append(
+      makeTextElement("strong", "⚠️ 检测到版本冲突，已暂停提交"),
+      makeTextElement("p", `编辑基于 v${session.base.version}；服务端报告 v${session.conflict.currentVersion ?? "未知"}。本地草稿已保留，版本号不会自动跳过冲突。请加载最新元数据并逐项核对。`)
+    );
+    const button = makeTextElement("button", "加载最新版本并核对草稿");
+    button.id = "btn-load-conflict";
+    button.type = "button";
+    button.className = "btn btn-secondary";
+    button.disabled = Boolean(session.reviewing);
+    button.addEventListener("click", () => loadConflictReview(session));
+    banner.appendChild(button);
+  }
+
+  async function latestTopicMetadata(topicId) {
+    // /api/topics reads DB metadata. Do not rebase from a truncated preview or
+    // Markdown detail: the reviewed backend can modify Markdown before a 409.
+    const response = await fetch("/api/topics", { cache: "no-store" });
+    if (!response.ok) throw new Error(`无法核对最新版本（HTTP ${response.status}）`);
+    const data = await response.json();
+    if (!Array.isArray(data.topics)) throw new Error("服务端议题列表格式无效");
+    const topic = data.topics.find((item) => item.id === topicId);
+    if (!topic) throw new Error("议题已不存在；草稿仍保留，请核对是否被删除或恢复");
+    if (!Number.isSafeInteger(topic.version) || topic.version < 1) {
+      throw new Error("服务端缺少有效版本号，为避免覆盖已停止保存");
+    }
+    return { ...topic };
+  }
+
+  async function loadConflictReview(session) {
+    if (state.editSession !== session || !session.conflict || session.reviewing) return;
+    session.reviewing = true;
+    renderConflictBanner(session);
+    try {
+      const latest = await latestTopicMetadata(session.topicId);
+      if (state.editSession !== session || !session.conflict) return;
+      session.conflict.latest = latest;
+      renderMergeReview(session, latest);
+    } catch (error) {
+      if (state.editSession === session) {
+        renderConflictBanner(session);
+        document.getElementById("modal-conflict-banner")?.appendChild(makeTextElement("p", `读取失败：${error.message}。仍禁止覆盖，可再次尝试加载。`));
+      }
+    } finally {
+      session.reviewing = false;
+      if (state.editSession === session) {
+        const button = document.getElementById("btn-load-conflict");
+        if (button) button.disabled = false;
+      }
+    }
+  }
+
+  function renderMergeReview(session, latest) {
+    const banner = bannerFor(session);
+    if (!banner) return;
+    const original = valuesFromMeta(session.base);
+    const remote = valuesFromMeta(latest);
+    const choices = new Map();
+    banner.append(
+      makeTextElement("strong", `核对版本 v${session.base.version} → v${latest.version}`),
+      makeTextElement("p", "服务端已变更的字段默认采用最新值；本地新增的用户意见、Agent 答复和提交说明保留。选择使用本地旧值会覆盖对应的新值。确认合并不会自动提交。")
+    );
+    const wrapper = document.createElement("div");
+    wrapper.style.cssText = "overflow:auto;max-height:340px;margin:0.6rem 0";
+    const table = document.createElement("table");
+    table.style.cssText = "width:100%;font-size:0.76rem;border-collapse:collapse;text-align:left";
+    const header = document.createElement("tr");
+    for (const label of ["字段", "打开时", "服务端最新", "本地草稿 / 选择"]) header.appendChild(makeTextElement("th", label));
+    table.appendChild(header);
+    const addRow = (label, before, current, local, control) => {
+      const row = document.createElement("tr");
+      for (const value of [label, before, current, local]) {
+        const cell = makeTextElement("td", value === "" || value == null ? "（空）" : value);
+        cell.style.cssText = "padding:0.4rem;vertical-align:top;white-space:pre-wrap;overflow-wrap:anywhere;border-top:1px solid var(--border-subtle)";
+        row.appendChild(cell);
+      }
+      if (control) row.lastElementChild.appendChild(control);
+      table.appendChild(row);
+    };
+    for (const field of EDIT_FIELDS) {
+      let choice = null;
+      if (remote[field.key] !== original[field.key] && remote[field.key] !== session.draft[field.key]) {
+        choice = document.createElement("select");
+        choice.className = "form-select";
+        choice.dataset.mergeField = field.key;
+        choice.setAttribute("aria-label", `${field.label}冲突处理`);
+        for (const [value, text] of [["server", "采用服务端最新值"], ["local", "使用本地草稿（覆盖新值）"]]) {
+          const option = makeTextElement("option", text);
+          option.value = value;
+          choice.appendChild(option);
+        }
+        choices.set(field.key, choice);
+      }
+      addRow(field.label, original[field.key], remote[field.key], session.draft[field.key], choice);
+    }
+    for (const [key, label] of READ_ONLY_FIELDS) {
+      if ((session.base[key] ?? "") !== (latest[key] ?? "")) {
+        addRow(label, session.base[key], latest[key], "只读元数据：采用服务端最新值");
+      }
+    }
+    wrapper.appendChild(table);
+    banner.appendChild(wrapper);
+    const confirmButton = makeTextElement("button", "确认以上合并，返回编辑（不提交）");
+    confirmButton.id = "btn-apply-conflict";
+    confirmButton.type = "button";
+    confirmButton.className = "btn btn-primary";
+    confirmButton.addEventListener("click", () => {
+      if (state.editSession !== session || session.conflict?.latest !== latest) return;
+      for (const field of EDIT_FIELDS) {
+        const choice = choices.get(field.key);
+        if (choice) {
+          if (choice.value === "server") session.draft[field.key] = remote[field.key];
+        } else if (remote[field.key] !== original[field.key]) {
+          session.draft[field.key] = remote[field.key];
+        }
+      }
+      session.base = { ...latest };
+      session.conflict = null;
+      session.request = null;
+      session.uncertain = false;
+      clearEditBanner();
+      writeEditForm(session);
+      showToast("已合并最新元数据并保留新增讨论。请检查表单后再提交。", "warning");
+    });
+    banner.appendChild(confirmButton);
+  }
+
+  function openEditModal(topicId) {
+    if (state.editSession?.saving) {
+      showToast("正在确认当前议题的保存结果，暂不能切换议题。", "warning");
+      return;
+    }
+    const meta = state.topicsMeta.find((item) => item.id === topicId);
+    if (!meta) return;
+    if (state.editSession) rememberDraft(state.editSession);
+    let session = state.draftsByTopic.get(topicId);
+    if (!session) {
+      const nextRound = (Number(meta.rounds_count) || 0) + 1;
+      session = {
+        topicId, base: { ...meta }, saving: false, reviewing: false,
+        request: null, uncertain: false, conflict: null,
+        draft: { ...valuesFromMeta(meta), new_user_opinion: "", new_agent_reply: "",
+          commit_message: `第 ${nextRound} 轮决策：确认 [${meta.title}]` },
+      };
+      session.initialDraft = JSON.stringify(session.draft);
+      state.draftsByTopic.set(topicId, session);
+    }
+    state.selectedTopicId = topicId;
+    state.editSession = session;
+    clearEditBanner();
+    writeEditForm(session);
+    if (session.conflict) renderConflictBanner(session);
+    else if (session.uncertain) renderUncertainBanner(session, "上次保存的响应未能确认。");
     document.getElementById("modal-edit-decision").classList.add("active");
+    if (!state.isServerOnline) showToast("当前为离线预览；草稿可编辑，但不会向后端提交。", "warning");
+  }
+
+  function createRequestId() {
+    if (globalThis.crypto?.randomUUID) return `req-${globalThis.crypto.randomUUID()}`;
+    return `req-${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+  }
+
+  function decisionPayload(session, requestId) {
+    const meta = session.base;
+    const draft = session.draft;
+    const wf = draft.workflow_state;
+    const outcome = draft.decision_outcome;
+    const initial = valuesFromMeta(meta);
+    const unchangedDecision = wf === initial.workflow_state && outcome === initial.decision_outcome;
+    const decisionStatus = unchangedDecision && meta.decision_status ? meta.decision_status :
+      outcome === "rejected" ? "已否决" : outcome === "superseded" ? "已替代" :
+        outcome === "deferred" ? "暂缓" : wf === "decided" ? "已定" : "待定";
+    return {
+      title: meta.title,
+      object: meta.object ?? "通用系统", function: meta.function ?? "核心规范",
+      section: meta.section ?? "未分类", priority: meta.priority ?? "普通",
+      workflow_state: wf, lifecycle_status: wf, decision_status: decisionStatus,
+      decision_outcome: outcome, rejection_reason: draft.rejection_reason.trim(),
+      implementation_state: draft.implementation_state, impl_commit: draft.impl_commit.trim(),
+      // The current backend treats omitted fields as empty, so send preserved values.
+      impl_verifier: meta.impl_verifier ?? "", superseded_by: meta.superseded_by ?? "",
+      new_user_opinion: draft.new_user_opinion.trim(), new_agent_reply: draft.new_agent_reply.trim(),
+      commit_message: draft.commit_message.trim(), expected_version: meta.version, request_id: requestId,
+    };
   }
 
   async function submitDecision() {
-    if (!state.selectedTopicId) return;
-    const meta = state.topicsMeta.find((t) => t.id === state.selectedTopicId);
-    if (!meta) return;
-
-    const wf = document.getElementById("form-workflow-state").value;
-    const outcome = document.getElementById("form-decision-outcome").value;
-    const rejectionReason = document.getElementById("form-rejection-reason").value.trim();
-    const implState = document.getElementById("form-impl-state").value;
-    const implCommit = document.getElementById("form-impl-commit").value.trim();
-    const userOpinion = document.getElementById("form-user-opinion").value.trim();
-    const agentReply = document.getElementById("form-agent-reply").value.trim();
-    const commitMsg = document.getElementById("form-commit-message").value.trim();
-
-    if (!commitMsg) {
-      alert("请输入 Git 变更提交说明 (Commit Message)");
+    const session = state.editSession;
+    if (!session || session.saving) return;
+    if (session.conflict) {
+      showToast("冲突尚未解决，请先核对并合并最新版本。", "warning");
       return;
     }
-
-    if (outcome === "rejected" && !rejectionReason) {
-      alert("明确否决方案时，必须录入否决原因与重新讨论前提，以便 Agent 遵守红线约束！");
+    if (!state.isServerOnline) {
+      showToast("当前为离线预览，已阻止保存。", "warning");
       return;
     }
-
-    const submitBtn = document.getElementById("btn-submit-decision");
-    submitBtn.disabled = true;
-    submitBtn.innerText = "正在保存并提交 Git...";
-
-    const requestId = "req-" + Date.now() + "-" + Math.random().toString(36).substring(2, 8);
-
-    try {
-      const res = await fetch(`/api/topic/${meta.id}/save`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Request-ID": requestId,
-          "X-Expected-Version": String(meta.version || 1)
-        },
-        body: JSON.stringify({
-          title: meta.title,
-          object: meta.object,
-          function: meta.function,
-          section: meta.section,
-          workflow_state: wf,
-          lifecycle_status: wf,
-          decision_outcome: outcome,
-          rejection_reason: rejectionReason,
-          implementation_state: implState,
-          impl_commit: implCommit,
-          priority: meta.priority,
-          new_user_opinion: userOpinion,
-          new_agent_reply: agentReply,
-          commit_message: commitMsg,
-          expected_version: meta.version || 1,
-          request_id: requestId
-        }),
-      });
-
-      const result = await res.json();
-
-      if (res.status === 409 && result.error === "version_conflict") {
-        // P1-D: 乐观并发冲突，保留用户草稿，提醒用户
-        const banner = document.getElementById("modal-conflict-banner");
-        if (banner) {
-          banner.style.display = "block";
-          banner.innerHTML = `
-            <strong>⚠️ 并发修改冲突：</strong> 该议题已被其他会话更新至版本 <code>v${result.current_version}</code>。
-            您的草稿已完好保留在下方编辑框中。请确认无误后再次点击提交。
-          `;
-        }
-        meta.version = result.current_version;
-        document.getElementById("modal-topic-version").innerText = `v${result.current_version}`;
-        showToast(`⚠️ 并发冲突：已刷新至最新服务端版本 v${result.current_version}，您的草稿已保留！`, "warning");
+    rememberDraft(session);
+    if (!session.request) {
+      if (!session.draft.commit_message.trim()) {
+        showToast("请输入 Git 变更提交说明。", "warning");
         return;
       }
-
-      if (res.ok && result.status === "success") {
-        closeModal("modal-edit-decision");
-        delete state.topicsDetailCache[meta.id];
-        await loadMetadataList();
-
-        if (result.git_status === "committed") {
-          showToast(`✅ Git Commit [${result.commit_hash}] 提交成功！已升级至第 ${result.round} 轮。`);
-        } else if (result.git_status === "skipped_unrelated_staged") {
-          showToast(`🛡️ ${result.git_message}`, "warning");
-        } else {
-          showToast(`✅ 决策已保存至本地数据库与 Markdown 文件！`);
-        }
-      } else {
-        alert(`保存出错: ${result.message || result.error}`);
+      if (session.draft.decision_outcome === "rejected" && !session.draft.rejection_reason.trim()) {
+        showToast("明确否决方案时，必须录入否决原因与重新讨论前提。", "warning");
+        return;
       }
-    } catch (e) {
-      alert(`网络或服务异常: ${e.message}`);
+      if (!Number.isSafeInteger(session.base.version) || session.base.version < 1) {
+        showToast("编辑基线缺少有效版本号，已停止保存。请重新加载议题。", "error");
+        return;
+      }
+    }
+    session.saving = true; // Set before the first await: prevents rapid double submits.
+    updateEditControls(session);
+    try {
+      if (!session.request) {
+        const latest = await latestTopicMetadata(session.topicId);
+        if (latest.version !== session.base.version) {
+          setConflict(session, latest.version);
+          return;
+        }
+        // Preflight reduces stale POSTs; only an atomic backend check can close the race.
+        const requestId = createRequestId();
+        session.request = {
+          id: requestId, version: session.base.version,
+          body: JSON.stringify(decisionPayload(session, requestId)),
+        };
+      }
+      const request = session.request;
+      const response = await fetch(`${topicPath(session.topicId)}/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Request-ID": request.id,
+          "X-Expected-Version": String(request.version) },
+        body: request.body,
+      });
+      const result = await response.json();
+      if (response.status === 409 && result.error === "version_conflict") {
+        setConflict(session, result.current_version);
+        return;
+      }
+      if (response.ok && result.status === "success") {
+        // Once the server confirms success, refresh/clipboard failures must not
+        // reclassify the save as uncertain or re-enable the old request.
+        session.request = null;
+        session.uncertain = false;
+        state.draftsByTopic.delete(session.topicId);
+        delete state.topicsDetailCache[session.topicId];
+        if (state.editSession === session) {
+          state.editSession = null;
+          document.getElementById("modal-edit-decision").classList.remove("active");
+        }
+        if (result.git_status === "committed") {
+          showToast(`决策已保存，Git Commit [${result.commit_hash || ""}] 已提交。`);
+        } else {
+          showToast(`决策已保存；Git 状态：${result.git_message || result.git_status || "未确认"}`, "warning");
+        }
+        const refreshed = await loadMetadataList();
+        if (!refreshed) showToast("保存已经成功，但列表刷新失败；请勿重复提交同一讨论。", "warning");
+        return;
+      }
+      const message = result.message || result.error || `HTTP ${response.status}`;
+      if (response.status >= 500 || response.status === 409 || response.ok) {
+        session.uncertain = true;
+        renderUncertainBanner(session, String(message));
+      } else {
+        session.request = null;
+        session.uncertain = false;
+        clearEditBanner();
+        showToast(`保存被拒绝：${message}`, "error");
+      }
+    } catch (error) {
+      if (session.request) {
+        session.uncertain = true;
+        renderUncertainBanner(session, error.message);
+      } else {
+        showToast(`无法保存：${error.message}`, "error");
+      }
     } finally {
-      submitBtn.disabled = false;
-      submitBtn.innerText = "确定决策并生成 Git Commit";
+      session.saving = false;
+      updateEditControls(session);
     }
   }
+
+  // Drafts are tab-local (not written to localStorage). Warn before discarding them.
+  window.addEventListener("beforeunload", (event) => {
+    if (state.editSession) rememberDraft(state.editSession);
+    const dirty = Array.from(state.draftsByTopic.values()).some((session) =>
+      session.request || session.conflict || JSON.stringify(session.draft) !== session.initialDraft
+    );
+    if (dirty) {
+      event.preventDefault();
+      event.returnValue = "";
+    }
+  });
 
   // Agent Context Modal
   async function openAgentContextModal() {
@@ -590,13 +885,16 @@
     }
   }
 
-  function copyAgentContext() {
+  async function copyAgentContext() {
     const textarea = document.getElementById("agent-context-markdown");
     if (!textarea || !textarea.value) return;
-    navigator.clipboard.writeText(textarea.value).then(() => {
-      showToast("📋 已成功复制 Agent 治理 Prompt Markdown！可直接粘贴至 Agent 工作上下文。");
+    try {
+      await writeClipboard(textarea.value);
+      showToast("📋 已复制 Agent 上下文 Markdown。");
       closeModal("modal-agent-context");
-    });
+    } catch (error) {
+      showToast(error.message, "error");
+    }
   }
 
   // Time Machine & Rollback
@@ -608,6 +906,7 @@
 
     try {
       const res = await fetch("/api/git/log");
+      if (!res.ok) throw new Error(`历史接口返回 HTTP ${res.status}`);
       if (res.ok) {
         const data = await res.json();
         let commitsHtml = "";
@@ -615,8 +914,8 @@
           commitsHtml += `
             <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.6rem 0.8rem; margin-bottom: 0.6rem;">
               <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.2rem;">
-                <span style="font-family: var(--font-mono); color: var(--color-primary); font-weight: 700;">${c.hash}</span>
-                <span>${c.date.split(" ")[0]}</span>
+                <span style="font-family: var(--font-mono); color: var(--color-primary); font-weight: 700;">${escapeHtml(c.hash)}</span>
+                <span>${escapeHtml(String(c.date || "").split(" ")[0])}</span>
               </div>
               <div style="font-size: 0.82rem; font-weight: 600;">${escapeHtml(c.message)}</div>
             </div>
@@ -629,14 +928,14 @@
           revsHtml += `
             <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.6rem 0.8rem; margin-bottom: 0.6rem;">
               <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.75rem; margin-bottom: 0.3rem;">
-                <span class="chip" style="font-family: var(--font-mono);">${r.rev_hash}</span>
+                <span class="chip" style="font-family: var(--font-mono);">${escapeHtml(r.rev_hash)}</span>
                 <div style="display: flex; gap: 0.3rem;">
                   ${state.selectedTopicId ? `
-                    <button class="btn btn-secondary" style="font-size: 0.7rem; padding: 0.15rem 0.4rem; color: var(--color-primary);" onclick="window.dashboardApp.restoreSingleTopic('${state.selectedTopicId}', ${r.rev_id})">
+                    <button class="btn btn-secondary" style="font-size: 0.7rem; padding: 0.15rem 0.4rem; color: var(--color-primary);" data-history-action="restore" data-topic-id="${escapeHtml(state.selectedTopicId)}" data-revision-id="${escapeHtml(r.rev_id)}">
                       ⏪ 仅回滚当前议题
                     </button>
                   ` : ""}
-                  <button class="btn btn-secondary" style="font-size: 0.7rem; padding: 0.15rem 0.4rem; color: #ef4444;" onclick="window.dashboardApp.rollbackRevision(${r.rev_id})">
+                  <button class="btn btn-secondary" style="font-size: 0.7rem; padding: 0.15rem 0.4rem; color: #ef4444;" data-history-action="rollback" data-revision-id="${escapeHtml(r.rev_id)}">
                     ⚠️ 全库快照重置
                   </button>
                 </div>
@@ -648,23 +947,24 @@
         });
 
         container.innerHTML = `
-          ${state.selectedTopicId ? `<div style="background: rgba(14,165,233,0.1); border: 1px solid rgba(14,165,233,0.3); border-radius: var(--radius-sm); padding: 0.5rem; font-size: 0.78rem; margin-bottom: 0.8rem;">当前选中议题：<code>#${state.selectedTopicId}</code>，可执行单议题精准回溯。</div>` : ""}
+          ${state.selectedTopicId ? `<div style="background: rgba(14,165,233,0.1); border: 1px solid rgba(14,165,233,0.3); border-radius: var(--radius-sm); padding: 0.5rem; font-size: 0.78rem; margin-bottom: 0.8rem;">当前选中议题：<code>#${escapeHtml(state.selectedTopicId)}</code>，可执行单议题精准回溯。</div>` : ""}
           <h4 style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 0.5rem; text-transform: uppercase;">Git 自动语义提交日志</h4>
           ${commitsHtml || '<div style="color: var(--text-muted); font-size: 0.8rem;">暂无提交</div>'}
-          <h4 style="font-size: 0.82rem; color: var(--text-muted); margin: 1.2rem 0 0.5rem; text-transform: uppercase;">SQLite 不可篡改快照链 (Revisions)</h4>
+          <h4 style="font-size: 0.82rem; color: var(--text-muted); margin: 1.2rem 0 0.5rem; text-transform: uppercase;">SQLite 历史快照 (Revisions)</h4>
           ${revsHtml || '<div style="color: var(--text-muted); font-size: 0.8rem;">暂无快照</div>'}
         `;
       }
     } catch (e) {
-      container.innerHTML = `<div style="color: #ef4444; padding: 2rem;">加载失败: ${e.message}</div>`;
+      container.innerHTML = `<div style="color: #ef4444; padding: 2rem;">加载失败: ${escapeHtml(e.message)}</div>`;
     }
   }
 
   // P1-C: 单议题针对性回滚
   async function restoreSingleTopic(topicId, revId) {
-    if (!confirm(`确定要仅将议题 [${topicId}] 精准回溯至快照 #${revId} 吗？其他议题将完全不受影响。`)) return;
+    if (!Number.isSafeInteger(Number(revId)) || Number(revId) < 1) return;
+    if (!confirm(`将议题 [${topicId}] 恢复至快照 #${revId}？请先备份数据；此前端补丁不修复后端恢复逻辑。`)) return;
     try {
-      const res = await fetch(`/api/topic/${topicId}/restore`, {
+      const res = await fetch(`${topicPath(topicId)}/restore`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ rev_id: revId, reason: "用户在看板中执行单议题精准回溯" }),
@@ -685,7 +985,8 @@
 
   // 全库回滚
   async function rollbackRevision(revId) {
-    if (!confirm(`⚠️ 严重警告：确定要将全库所有议题及文件完全重置至快照 #${revId} 吗？\n该操作将同步覆写 Markdown 文件和 SQLite 数据库。`)) return;
+    if (!Number.isSafeInteger(Number(revId)) || Number(revId) < 1) return;
+    if (!confirm(`⚠️ 全库恢复至快照 #${revId}？\n此前端补丁未修复后端恢复的一致性问题。请先完整备份，不要在未修复的生产实例上执行。`)) return;
     try {
       const res = await fetch("/api/rollback", {
         method: "POST",
@@ -695,7 +996,7 @@
       const data = await res.json();
       if (res.ok) {
         closeDrawer("drawer-time-machine");
-        state.topicsDetailCache = {};
+        state.topicsDetailCache = Object.create(null);
         await loadMetadataList();
         showToast(`⏪ 全库已成功回滚至快照 ${data.rolled_back_to}！`);
       } else {
@@ -706,14 +1007,32 @@
     }
   }
 
-  function copyCitation(title, id) {
+  async function writeClipboard(text) {
+    if (!navigator.clipboard || !navigator.clipboard.writeText) {
+      throw new Error("浏览器不支持当前页面的剪贴板访问，请使用 localhost 或 HTTPS 并检查权限。");
+    }
+    await navigator.clipboard.writeText(text);
+  }
+
+  async function copyCitation(title, id) {
     const text = `[${title}](#${id})`;
-    navigator.clipboard.writeText(text).then(() => {
+    try {
+      await writeClipboard(text);
       showToast(`已复制引用格式：${text}`);
-    });
+    } catch (error) {
+      showToast(`复制失败：${error.message}`, "error");
+    }
   }
 
   function closeModal(modalId) {
+    if (modalId === "modal-edit-decision" && state.editSession) {
+      if (state.editSession.saving) {
+        showToast("正在确认保存结果，请勿关闭编辑窗口。", "warning");
+        return;
+      }
+      rememberDraft(state.editSession);
+      state.editSession = null;
+    }
     document.getElementById(modalId)?.classList.remove("active");
   }
 
@@ -778,6 +1097,27 @@
     // Filter pills
     document.querySelectorAll(".filter-pills").forEach((container) => {
       bindFilterPills(container);
+    });
+
+    // Delegation survives card/history re-renders. No server values enter JS source.
+    document.getElementById("topics-container")?.addEventListener("click", (event) => {
+      const target = event.target instanceof Element ? event.target.closest("[data-action]") : null;
+      if (!target || !event.currentTarget.contains(target)) return;
+      const action = target.dataset.action;
+      if (action === "reset") return resetFilters();
+      const topic = state.topicsMeta.find((item) => item.id === target.dataset.topicId);
+      if (!topic) return;
+      if (action === "toggle") toggleCard(topic.id);
+      if (action === "edit") openEditModal(topic.id);
+      if (action === "copy") copyCitation(topic.title, topic.id);
+    });
+    document.getElementById("drawer-history-list")?.addEventListener("click", (event) => {
+      const target = event.target instanceof Element ? event.target.closest("[data-history-action]") : null;
+      if (!target || !event.currentTarget.contains(target)) return;
+      const revision = Number(target.dataset.revisionId);
+      if (!Number.isSafeInteger(revision) || revision < 1) return;
+      if (target.dataset.historyAction === "restore") restoreSingleTopic(target.dataset.topicId, revision);
+      if (target.dataset.historyAction === "rollback") rollbackRevision(revision);
     });
 
     // Initial load
