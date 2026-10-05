@@ -64,6 +64,14 @@ class DashboardServer:
                     data = json.loads(self.config.metadata_json_path.read_text(encoding="utf-8"))
                     for t in data.get("topics", []):
                         self.db.upsert_topic(t)
+
+            # 若修订历史为空（如全新空项目），建立初始空基线快照供回滚/撤销首次创建 (R11)
+            if len(self.db.get_revisions(limit=1)) == 0:
+                self.db.commit_revision(
+                    action_type="INIT",
+                    summary="项目初始基线快照",
+                    author="系统初始化"
+                )
         except Exception as e:
             print(f"[WARN] 初始数据自检异常: {e}")
 
