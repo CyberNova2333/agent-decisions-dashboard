@@ -26,7 +26,11 @@ class RecoveryManager:
         """计算议题内容的规范化 SHA-256 摘要，用于精准检测内容漂移"""
         rounds_str_parts = []
         for r in rounds:
-            rounds_str_parts.append(f"{r.get('title', '')}:{r.get('content', '')}:{r.get('user_opinion', '')}:{r.get('agent_reply', '')}:{r.get('commit_message', '')}")
+            # 对称比较业务语义字段，不引入展示层标题时间戳与原始 Markdown 差异 (F06)
+            u = str(r.get("user_opinion") or "").strip()
+            a = str(r.get("agent_reply") or "").strip()
+            c = str(r.get("commit_message") or "").strip()
+            rounds_str_parts.append(f"{u}:{a}:{c}")
         rounds_str = "||".join(rounds_str_parts)
 
         fields = [
