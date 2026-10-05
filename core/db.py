@@ -390,7 +390,10 @@ class DatabaseManager:
             if expected_topic is not None and row["topic_id"] != expected_topic:
                 return False, None
             if row["req_hash"] == expected_hash:
-                return True, json.loads(row["response_json"])
+                res = json.loads(row["response_json"])
+                if "status" not in res and row["status"]:
+                    res["status"] = row["status"]
+                return True, res
             return False, None
 
     def record_idempotency(
