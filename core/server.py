@@ -37,7 +37,9 @@ class DashboardServer:
     def __init__(self, config: Config, web_dir: Optional[Path] = None, host: Optional[str] = None, port: Optional[int] = None):
         self.config = config
         self.repo_root = config.base_dir
-        self.web_dir = web_dir or (Path(__file__).resolve().parent.parent / "web")
+        builtin_web = Path(__file__).resolve().parent / "web"
+        source_web = Path(__file__).resolve().parent.parent / "web"
+        self.web_dir = web_dir or (builtin_web if builtin_web.exists() else source_web)
         self.host = host or getattr(config, "host", "127.0.0.1")
         self.port = port or getattr(config, "port", 8765)
         self.service = DecisionService(config)

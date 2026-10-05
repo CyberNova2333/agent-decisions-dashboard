@@ -29,3 +29,11 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Packaging & distribution
+build/
+dist/
+*.egg-info/
+*.whl
+decisions.db
+
