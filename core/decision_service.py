@@ -97,24 +97,47 @@ class DecisionService:
                 cached_res["is_replay"] = True
                 return cached_res
 
-        # 2. 版本检查与分配：在产生任何持久副作用前先校验版本 (R02, F02, F15)
+        user_opinion = (data.get("new_user_opinion") or data.get("user_opinion") or "").strip()
+        agent_reply = (data.get("new_agent_reply") or data.get("agent_reply") or "").strip()
+        commit_msg = (data.get("commit_message") or "").strip()
+
+        # 2. 版本检查与分配：在产生任何持久副作用前先校验版本 (R02, F02, F03, F15)
         existing_row = self.db.get_topic(topic_id)
+        current_db_ver = existing_row.get("version", 1) if existing_row else 1
         md_file = self.config.decisions_dir / f"{topic_id}.md"
         existing_disk_text: Optional[str] = None
+        is_interrupted_prior_attempt = False
+
         if md_file.exists():
             try:
                 existing_disk_text = md_file.read_text(encoding="utf-8")
                 parsed_disk = self.parser.parse_markdown_file(md_file)
                 if parsed_disk:
                     disk_ver = parsed_disk.get("version", 1)
-                    if expected_version is not None and disk_ver != expected_version:
+                    disk_rounds = parsed_disk.get("rounds", [])
+                    
+                    # 检查磁盘是否已在上次中断的写入中先一步落盘了本请求的轮次 (F03)
+                    last_matches = False
+                    if disk_rounds and (user_opinion or agent_reply or commit_msg):
+                        last_r = disk_rounds[-1]
+                        last_u = (last_r.get("user_opinion") or "").strip()
+                        last_a = (last_r.get("agent_reply") or "").strip()
+                        last_c = (last_r.get("commit_message") or "").strip()
+                        if (not user_opinion or user_opinion == last_u) and \
+                           (not agent_reply or agent_reply == last_a) and \
+                           (not commit_msg or commit_msg == last_c):
+                            last_matches = True
+
+                    if expected_version is not None and disk_ver == expected_version + 1 and current_db_ver == expected_version and last_matches:
+                        is_interrupted_prior_attempt = True
+                    elif expected_version is not None and disk_ver != expected_version:
                         raise VersionConflictError(
                             current_version=disk_ver,
                             expected_version=expected_version,
                             topic_id=topic_id
                         )
-                    # 检测未入库的正文或元数据漂移 (F15)
-                    if existing_row:
+                    elif existing_row and not is_interrupted_prior_attempt:
+                        # 检测未入库的正文或元数据漂移 (F15)
                         if parsed_disk.get("title") != existing_row.get("title") or parsed_disk.get("core_content", "").strip() != existing_row.get("content", "").strip():
                             raise VersionConflictError(
                                 current_version=disk_ver,
@@ -201,12 +224,24 @@ class DecisionService:
         md_file = self.config.decisions_dir / f"{topic_id}.md"
         existing_doc = self.parser.parse_markdown_file(md_file)
         current_rounds = existing_doc["rounds"] if existing_doc else []
-        new_round_num = len(current_rounds) + 1
 
+        # 幂等重试防护：检查最后一轮是否已包含当前请求的讨论内容，杜绝因更早数据库异常重试时重复追加轮次 (F03)
+        is_duplicate_round = False
+        if current_rounds and (user_opinion or agent_reply or commit_msg):
+            last_r = current_rounds[-1]
+            last_u = (last_r.get("user_opinion") or "").strip()
+            last_a = (last_r.get("agent_reply") or "").strip()
+            last_c = (last_r.get("commit_message") or "").strip()
+            if (not user_opinion or user_opinion == last_u) and \
+               (not agent_reply or agent_reply == last_a) and \
+               (not commit_msg or commit_msg == last_c):
+                is_duplicate_round = True
+
+        new_round_num = len(current_rounds) + (0 if is_duplicate_round else 1)
         core_content = content_override if content_override is not None else (existing_doc["core_content"] if existing_doc else "")
 
         new_round_info = None
-        if user_opinion or agent_reply or commit_msg:
+        if (user_opinion or agent_reply or commit_msg) and not is_duplicate_round:
             new_round_info = {
                 "commit_message": commit_msg,
                 "user_opinion": user_opinion,
@@ -250,9 +285,15 @@ class DecisionService:
 
         # 6. 更新 SQLite 数据库结构化索引
         discussion = json.loads(existing_row["discussion_json"]) if (existing_row and existing_row.get("discussion_json")) else []
-        if user_opinion:
+        has_commit = any(d.get("val") == commit_msg for d in discussion if "变更说明" in d.get("key", "")) if commit_msg else False
+        has_opinion = any(d.get("val") == user_opinion for d in discussion if "用户意见" in d.get("key", "")) if user_opinion else False
+        has_reply = any(d.get("val") == agent_reply for d in discussion if "答复" in d.get("key", "") or "落实" in d.get("key", "")) if agent_reply else False
+
+        if commit_msg and not has_commit:
+            discussion.append({"key": f"第 {new_round_num} 轮变更说明", "val": commit_msg})
+        if user_opinion and not has_opinion:
             discussion.append({"key": f"第 {new_round_num} 轮用户意见", "val": user_opinion})
-        if agent_reply:
+        if agent_reply and not has_reply:
             discussion.append({"key": f"第 {new_round_num} 轮落实答复", "val": agent_reply})
 
         target_expected_version = expected_version if expected_version is not None else (existing_row.get("version") if existing_row else None)
