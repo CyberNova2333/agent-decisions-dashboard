@@ -294,12 +294,25 @@ class RecoveryManager:
                 self.db.upsert_topic(item["data"], exact_version=item["version"], conn=conn, request_id=last_req)
             conn.commit()
 
-        # 3. 若重建后存在议题且快照链为空，建立初始基线快照以供撤销 (U14)
-        if parsed_items and len(self.db.get_revisions(limit=1)) == 0:
+        # 3. 若重建后存在议题，且快照链为空或检测到新导入外部议题，建立基线快照以供回溯与撤销 (U14, R10)
+        latest_revs = self.db.get_revisions(limit=1)
+        should_commit_baseline = False
+        baseline_summary = "初始化导入基线快照"
+        if len(latest_revs) == 0:
+            should_commit_baseline = True
+        elif parsed_items:
+            latest_snap = json.loads(self.db.get_revision_by_id(latest_revs[0]["rev_id"])["snapshot_json"])
+            snap_topic_map = {t["id"]: t for t in latest_snap.get("topics", [])}
+            newly_imported = [item["id"] for item in parsed_items if item["id"] not in snap_topic_map]
+            if newly_imported:
+                should_commit_baseline = True
+                baseline_summary = f"导入外部议题基线快照: {', '.join(newly_imported)}"
+
+        if parsed_items and should_commit_baseline:
             self.db.commit_revision(
                 action_type="BASELINE_IMPORT",
-                summary="初始化导入基线快照",
-                author="系统初始化"
+                summary=baseline_summary,
+                author="系统导入/重建"
             )
 
         # 4. 刷新派生物 metadata.json
