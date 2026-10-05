@@ -34,10 +34,12 @@ from core.agent_context import AgentContextEngine
 MAX_BODY_SIZE = 10 * 1024 * 1024  # 10MB 最大请求体限制防 DoS
 
 class DashboardServer:
-    def __init__(self, config: Config, web_dir: Optional[Path] = None):
+    def __init__(self, config: Config, web_dir: Optional[Path] = None, host: Optional[str] = None, port: Optional[int] = None):
         self.config = config
         self.repo_root = config.base_dir
         self.web_dir = web_dir or (Path(__file__).resolve().parent.parent / "web")
+        self.host = host or getattr(config, "host", "127.0.0.1")
+        self.port = port or getattr(config, "port", 8765)
         self.service = DecisionService(config)
         self.recovery = RecoveryManager(config, self.service.db)
         self.agent = AgentContextEngine(config, self.service.db)
@@ -123,20 +125,31 @@ def make_handler(server: DashboardServer):
             origin = self.headers.get("Origin")
             if not origin:
                 return None
-            parsed_origin = urllib.parse.urlparse(origin)
-            host = parsed_origin.hostname
-            allowed_hosts = {"localhost", "127.0.0.1", server.host}
-            if host in allowed_hosts:
-                return origin
+            try:
+                parsed_origin = urllib.parse.urlparse(origin)
+                if parsed_origin.scheme not in ("http", "https"):
+                    return None
+                host = parsed_origin.hostname
+                allowed_hosts = {"localhost", "127.0.0.1"}
+                srv_host = getattr(server, "host", None) or getattr(server.config, "host", "127.0.0.1")
+                if srv_host:
+                    allowed_hosts.add(srv_host)
+                if host in allowed_hosts:
+                    return origin
+            except Exception:
+                pass
             return None
 
         def end_headers(self):
-            allowed_origin = self._get_allowed_origin()
-            if allowed_origin:
-                self.send_header("Access-Control-Allow-Origin", allowed_origin)
-                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-                self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Request-ID, X-Expected-Version")
-                self.send_header("Vary", "Origin")
+            try:
+                allowed_origin = self._get_allowed_origin()
+                if allowed_origin:
+                    self.send_header("Access-Control-Allow-Origin", allowed_origin)
+                    self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+                    self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Request-ID, X-Expected-Version")
+                    self.send_header("Vary", "Origin")
+            except Exception:
+                pass
             super().end_headers()
 
         def do_OPTIONS(self):
@@ -471,7 +484,7 @@ def main():
     host = args.host or config.host
     port = args.port or config.port
 
-    server = DashboardServer(config)
+    server = DashboardServer(config, host=host, port=port)
     handler_class = make_handler(server)
 
     httpd = HTTPServer((host, port), handler_class)
