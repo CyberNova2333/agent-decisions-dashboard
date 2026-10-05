@@ -143,5 +143,100 @@ rejection_reason: "性能损耗超过200%"
         self.assertEqual(topic["impl_commit"], "commit-789xyz")
         self.assertIn("全量单元测试与集成测试通过", topic["impl_verifier"])
 
+    def test_record_verification_preserves_section(self):
+        """测试核验证据记录时不丢失 section 分类字段 (R06)"""
+        self.service.save_topic(
+            topic_id="adr-sec-preserve",
+            data={
+                "title": "分类保护测试",
+                "section": "网络通信",
+                "workflow_state": "decided"
+            }
+        )
+        self.agent.record_verification(
+            topic_id="adr-sec-preserve",
+            impl_commit="hash-sec-1",
+            verifier="QA",
+            mark_verified=True
+        )
+        # 验证 Markdown 中的 section 仍是网络通信
+        parsed = self.service.parser.parse_markdown_file(self.cfg.decisions_dir / "adr-sec-preserve.md")
+        self.assertEqual(parsed["section"], "网络通信")
+        self.assertEqual(parsed["implementation_state"], "verified")
+
+    def test_rollback_no_deadlock_and_cleans_orphans(self):
+        """测试全库快照回滚不自死锁，且清理目标快照外的多余议题文件 (R05)"""
+        # 1. 保存议题 A，生成快照 rev 1
+        res1 = self.service.save_topic(
+            topic_id="adr-snapshot-a",
+            data={"title": "快照 A 议题", "section": "底层协议"}
+        )
+        revs = self.service.db.get_revisions()
+        rev1_id = revs[0]["rev_id"]
+
+        # 2. 保存新议题 B
+        self.service.save_topic(
+            topic_id="adr-snapshot-b",
+            data={"title": "快照 B 议题", "section": "UI 交互"}
+        )
+        file_b = self.cfg.decisions_dir / "adr-snapshot-b.md"
+        self.assertTrue(file_b.exists())
+
+        # 3. 回滚至快照 rev 1 (必须无锁成功)
+        rb_res = self.service.rollback_full(rev1_id)
+        self.assertEqual(rb_res["status"], "success")
+
+        # 4. 验证数据库中只有议题 A，没有议题 B
+        all_topics = self.service.db.get_all_topics()
+        topic_ids = [t["id"] for t in all_topics]
+        self.assertIn("adr-snapshot-a", topic_ids)
+        self.assertNotIn("adr-snapshot-b", topic_ids)
+
+        # 5. 验证议题 B 的文件已从 decisions 移出，不会在后续 rebuild 中复活
+        self.assertFalse(file_b.exists())
+        self.recovery.rebuild_index_from_markdown()
+        all_topics_after = self.service.db.get_all_topics()
+        self.assertNotIn("adr-snapshot-b", [t["id"] for t in all_topics_after])
+
+    def test_single_topic_restore_preserves_all_fields_and_rounds(self):
+        """测试单议题恢复保留 section、impl 证据，且轮次不分裂为两倍伪轮次 (R06)"""
+        self.service.save_topic(
+            topic_id="adr-field-preserve",
+            data={
+                "title": "单议题字段完整测试",
+                "section": "存储架构",
+                "impl_commit": "init-commit-111",
+                "impl_verifier": "Lead: verified",
+                "user_opinion": "坚持本地存储",
+                "agent_reply": "落实为 SQLite"
+            }
+        )
+        revs = self.service.db.get_revisions()
+        target_rev = revs[0]["rev_id"]
+
+        # 修改为新内容
+        self.service.save_topic(
+            topic_id="adr-field-preserve",
+            data={
+                "title": "被修改的标题",
+                "user_opinion": "第二轮原话",
+                "agent_reply": "第二轮答复"
+            }
+        )
+
+        # 精准恢复单议题至 target_rev
+        restore_res = self.service.restore_single_topic("adr-field-preserve", target_rev)
+        self.assertEqual(restore_res["status"], "success")
+
+        # 读取恢复后的 Markdown
+        parsed = self.service.parser.parse_markdown_file(self.cfg.decisions_dir / "adr-field-preserve.md")
+        self.assertEqual(parsed["section"], "存储架构")
+        self.assertEqual(parsed["impl_commit"], "init-commit-111")
+        self.assertEqual(parsed["impl_verifier"], "Lead: verified")
+        # 轮次数应为 1，用户原话与答复在同一轮
+        self.assertEqual(len(parsed["rounds"]), 1)
+        self.assertIn("坚持本地存储", parsed["rounds"][0]["user_opinion"])
+        self.assertIn("落实为 SQLite", parsed["rounds"][0]["agent_reply"])
+
 if __name__ == "__main__":
     unittest.main()

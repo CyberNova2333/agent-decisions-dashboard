@@ -5,6 +5,7 @@ Agent Decisions Dashboard - Decision Service
 """
 
 import os
+import shutil
 import json
 import uuid
 import hashlib
@@ -349,6 +350,71 @@ class DecisionService:
             raise TopicValidationError(f"议题 ID [{topic_id}] 已存在")
         return self.save_topic(topic_id=topic_id, data=data, expected_version=None, request_id=request_id)
 
+    def _reconstruct_rounds_from_topic(self, topic_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """从议题快照数据无损重构讨论轮次，防止 Q&A 拆裂为伪轮次 (R06)"""
+        if "rounds" in topic_data and isinstance(topic_data["rounds"], list) and topic_data["rounds"]:
+            return topic_data["rounds"]
+
+        discussion = topic_data.get("discussion") or []
+        if isinstance(discussion, str):
+            try:
+                discussion = json.loads(discussion)
+            except Exception:
+                discussion = []
+
+        rounds_map: Dict[int, Dict[str, Any]] = {}
+        unmatched_items: List[Dict[str, Any]] = []
+
+        for d in discussion:
+            k = d.get("key", "")
+            v = d.get("val", "")
+            m = re.search(r'第\s*(\d+)\s*轮', k)
+            if m:
+                r_num = int(m.group(1))
+                if r_num not in rounds_map:
+                    rounds_map[r_num] = {
+                        "title": f"第 {r_num} 轮定案与要求",
+                        "user_opinion": "",
+                        "agent_reply": "",
+                        "commit_message": ""
+                    }
+                if "用户" in k:
+                    rounds_map[r_num]["user_opinion"] = v
+                elif "答复" in k or "落实" in k:
+                    rounds_map[r_num]["agent_reply"] = v
+                elif "变更" in k:
+                    rounds_map[r_num]["commit_message"] = v
+                else:
+                    if rounds_map[r_num]["user_opinion"]:
+                        rounds_map[r_num]["user_opinion"] += "\n" + v
+                    else:
+                        rounds_map[r_num]["user_opinion"] = v
+            else:
+                unmatched_items.append({"title": k or "历史讨论", "content": v})
+
+        result = []
+        for r_num in sorted(rounds_map.keys()):
+            r_info = rounds_map[r_num]
+            content_parts = []
+            if r_info["commit_message"]:
+                content_parts.append(f"- **变更说明**：{r_info['commit_message']}")
+            if r_info["user_opinion"]:
+                content_parts.append(f"- **💡 用户意见（最新原话）**：\n\n{r_info['user_opinion']}\n")
+            if r_info["agent_reply"]:
+                content_parts.append(f"- **🤖 团队答复（落实说明）**：\n\n{r_info['agent_reply']}\n")
+            result.append({
+                "title": r_info["title"],
+                "content": "\n".join(content_parts).strip(),
+                "user_opinion": r_info["user_opinion"],
+                "agent_reply": r_info["agent_reply"],
+                "commit_message": r_info["commit_message"]
+            })
+
+        for item in unmatched_items:
+            result.append(item)
+
+        return result
+
     def restore_single_topic(
         self,
         topic_id: str,
@@ -357,7 +423,7 @@ class DecisionService:
         reason: str = ""
     ) -> Dict[str, Any]:
         """
-        P1-C: 精准恢复单个议题至历史快照状态，不波及其他议题，并保留历史操作记录
+        P1-C: 精准恢复单个议题至历史快照状态，不波及其他议题，并保留完整字段与轮次结构 (R06)
         """
         topic_id = self.validate_topic_id(topic_id)
         res = self.db.restore_topic_from_revision(topic_id, rev_id, author, reason)
@@ -365,11 +431,10 @@ class DecisionService:
 
         # 写回该议题的 Markdown 文本
         md_file = self.config.decisions_dir / f"{topic_id}.md"
-        lifecycle_badge = self.get_lifecycle_badge(topic_data.get("lifecycle_status", "discussing"))
+        wf_state = topic_data.get("workflow_state") or topic_data.get("lifecycle_status", "discussing")
+        lifecycle_badge = self.get_lifecycle_badge(wf_state)
         
-        rounds = []
-        for d in topic_data.get("discussion", []):
-            rounds.append({"title": d.get("key", "历史讨论"), "content": d.get("val", "")})
+        rounds = self._reconstruct_rounds_from_topic(topic_data)
 
         md_text = self.parser.serialize_markdown(
             topic_id=topic_id,
@@ -382,15 +447,27 @@ class DecisionService:
             func=topic_data.get("function", "核心规范"),
             core_content=topic_data.get("content", ""),
             existing_rounds=rounds,
-            workflow_state=topic_data.get("workflow_state", "discussing"),
+            workflow_state=wf_state,
             decision_outcome=topic_data.get("decision_outcome", ""),
             rejection_reason=topic_data.get("rejection_reason", ""),
             superseded_by=topic_data.get("superseded_by", ""),
             implementation_state=topic_data.get("implementation_state", "not_started"),
-            version=res["new_version"]
+            impl_commit=topic_data.get("impl_commit", ""),
+            impl_verifier=topic_data.get("impl_verifier", ""),
+            version=res["new_version"],
+            section=topic_data.get("section", "未分类")
         )
         self.config.decisions_dir.mkdir(parents=True, exist_ok=True)
-        md_file.write_text(md_text, encoding="utf-8")
+        temp_file = md_file.with_suffix(f".tmp.{uuid.uuid4().hex[:8]}")
+        try:
+            temp_file.write_text(md_text, encoding="utf-8")
+            os.replace(temp_file, md_file)
+        finally:
+            if temp_file.exists():
+                try:
+                    temp_file.unlink()
+                except OSError:
+                    pass
 
         # 同步 metadata.json
         self.recovery.sync_metadata_json()
@@ -407,20 +484,36 @@ class DecisionService:
 
     def rollback_full(self, rev_id: int, author: str = "人类/Agent") -> Dict[str, Any]:
         """
-        P1-C: 全库恢复至指定快照，同时确保所有 Markdown 文件与数据库完全同步
+        P1-C: 全库恢复至指定快照，同时清理目标快照外的多余文件并保持字段完整 (R05, R06)
         """
         res = self.db.rollback_revision(rev_id, author)
         snapshot = res["snapshot"]
 
-        # 写回快照中的所有 Markdown 文件
+        target_topics = snapshot.get("topics", [])
+        target_ids = {t["id"] for t in target_topics}
+
         staged_files = [self.config.metadata_json_path, self.config.database_path]
-        for t in snapshot.get("topics", []):
+
+        # 1. 处理快照之外的多余现存文件：移入归档区并暂存 Git 删除，防止重启或重建时复活 (R05)
+        archive_dir = self.config.decisions_dir / ".archived_rollback"
+        if self.config.decisions_dir.exists():
+            for p in self.config.decisions_dir.glob("*.md"):
+                if p.stem not in target_ids:
+                    archive_dir.mkdir(parents=True, exist_ok=True)
+                    archive_target = archive_dir / f"{p.stem}_{uuid.uuid4().hex[:6]}.md"
+                    try:
+                        shutil.move(str(p), str(archive_target))
+                    except Exception:
+                        p.unlink(missing_ok=True)
+                    staged_files.append(p)
+
+        # 2. 写回快照中的所有 Markdown 文件 (原子替换并保持完整字段)
+        for t in target_topics:
             tid = t["id"]
             md_file = self.config.decisions_dir / f"{tid}.md"
-            badge = self.get_lifecycle_badge(t.get("lifecycle_status", "discussing"))
-            rounds = []
-            for d in t.get("discussion", []):
-                rounds.append({"title": d.get("key", "历史讨论"), "content": d.get("val", "")})
+            wf_state = t.get("workflow_state") or t.get("lifecycle_status", "discussing")
+            badge = self.get_lifecycle_badge(wf_state)
+            rounds = self._reconstruct_rounds_from_topic(t)
 
             md_text = self.parser.serialize_markdown(
                 topic_id=tid,
@@ -433,20 +526,32 @@ class DecisionService:
                 func=t.get("function", "核心规范"),
                 core_content=t.get("content", ""),
                 existing_rounds=rounds,
-                workflow_state=t.get("workflow_state", "discussing"),
+                workflow_state=wf_state,
                 decision_outcome=t.get("decision_outcome", ""),
                 rejection_reason=t.get("rejection_reason", ""),
                 superseded_by=t.get("superseded_by", ""),
                 implementation_state=t.get("implementation_state", "not_started"),
-                version=t.get("version", 1)
+                impl_commit=t.get("impl_commit", ""),
+                impl_verifier=t.get("impl_verifier", ""),
+                version=t.get("version", 1),
+                section=t.get("section", "未分类")
             )
-            md_file.write_text(md_text, encoding="utf-8")
+            temp_file = md_file.with_suffix(f".tmp.{uuid.uuid4().hex[:8]}")
+            try:
+                temp_file.write_text(md_text, encoding="utf-8")
+                os.replace(temp_file, md_file)
+            finally:
+                if temp_file.exists():
+                    try:
+                        temp_file.unlink()
+                    except OSError:
+                        pass
             staged_files.append(md_file)
 
-        # 刷新 metadata.json
+        # 3. 刷新 metadata.json
         self.recovery.sync_metadata_json()
 
-        # 递交 Git 提交
+        # 4. 递交 Git 提交
         self.git.commit_decision(
             topic_title="全库快照回滚",
             lifecycle_badge="时间旅行",
@@ -455,3 +560,91 @@ class DecisionService:
         )
 
         return res
+
+    def record_verification(
+        self,
+        topic_id: str,
+        impl_commit: str,
+        verifier: str,
+        test_summary: str = "",
+        mark_verified: bool = True
+    ) -> Dict[str, Any]:
+        """
+        P2-E: 关联实现证据到议题台账：
+        原子更新 Markdown 权威文件与 SQLite 审计记录，完整保留 section 与正交状态 (R06)
+        """
+        topic_id = self.validate_topic_id(topic_id)
+        row = self.db.get_topic(topic_id)
+        if not row:
+            raise TopicValidationError(f"未找到议题 [{topic_id}]")
+
+        new_impl_state = "verified" if mark_verified else "implemented"
+        impl_note = f"{verifier}: {test_summary}".strip() if test_summary else verifier
+
+        data = dict(row)
+        data["implementation_state"] = new_impl_state
+        data["impl_status"] = "已核验" if mark_verified else "已实现"
+        data["impl_commit"] = impl_commit
+        data["impl_verifier"] = impl_note
+
+        new_version = self.db.upsert_topic(data)
+
+        # 更新 Markdown 权威文件 (保留原 section 等所有字段)
+        md_file = self.config.decisions_dir / f"{topic_id}.md"
+        parsed = self.parser.parse_markdown_file(md_file)
+        if parsed:
+            section = data.get("section") or parsed.get("section", "未分类")
+            wf_state = data.get("workflow_state") or parsed.get("workflow_state", "discussing")
+            badge = self.get_lifecycle_badge(wf_state)
+            updated_md = self.parser.serialize_markdown(
+                topic_id=topic_id,
+                title=parsed["title"],
+                lifecycle_badge=badge,
+                decision_status=data.get("decision_status", "已定"),
+                impl_status=data["impl_status"],
+                priority=parsed.get("priority", "普通"),
+                obj=parsed.get("object", "通用系统"),
+                func=parsed.get("function", "核心规范"),
+                core_content=parsed["core_content"],
+                existing_rounds=parsed["rounds"],
+                workflow_state=wf_state,
+                decision_outcome=data.get("decision_outcome") or parsed.get("decision_outcome", ""),
+                rejection_reason=data.get("rejection_reason") or parsed.get("rejection_reason", ""),
+                superseded_by=data.get("superseded_by") or parsed.get("superseded_by", ""),
+                implementation_state=new_impl_state,
+                impl_commit=impl_commit,
+                impl_verifier=impl_note,
+                version=new_version,
+                section=section
+            )
+            temp_file = md_file.with_suffix(f".tmp.{uuid.uuid4().hex[:8]}")
+            try:
+                temp_file.write_text(updated_md, encoding="utf-8")
+                os.replace(temp_file, md_file)
+            finally:
+                if temp_file.exists():
+                    try:
+                        temp_file.unlink()
+                    except OSError:
+                        pass
+
+        self.recovery.sync_metadata_json()
+
+        rev = self.db.commit_revision(
+            action_type="VERIFY_IMPLEMENTATION",
+            summary=f"核验实现: [{data['title']}] -> {new_impl_state} (Commit: {impl_commit})",
+            topic_id=topic_id,
+            author=verifier,
+            diff_summary=f"impl_commit={impl_commit}, verifier={impl_note}"
+        )
+
+        return {
+            "status": "success",
+            "topic_id": topic_id,
+            "implementation_state": new_impl_state,
+            "impl_commit": impl_commit,
+            "impl_verifier": impl_note,
+            "version": new_version,
+            "revision_hash": rev["rev_hash"],
+            "message": f"议题 [{topic_id}] 已成功核验并记录至台账与快照！"
+        }
