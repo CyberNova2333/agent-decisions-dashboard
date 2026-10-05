@@ -351,6 +351,33 @@ body {
 .badge-decided { background: var(--color-decided-light); color: var(--color-decided); }
 .badge-discussing { background: var(--color-discussing-light); color: var(--color-discussing); }
 .badge-pending { background: var(--color-pending-light); color: var(--color-pending); }
+.badge-rejected { background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); }
+.badge-verified { background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); }
+.badge-in-progress { background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3); }
+.badge-superseded { background: rgba(148, 163, 184, 0.15); color: #94a3b8; }
+
+.rejection-box {
+  background: rgba(239, 68, 68, 0.08);
+  border-left: 3px solid #ef4444;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+  margin: 0.4rem 0;
+  color: var(--text-main);
+}
+.rejection-box strong {
+  color: #ef4444;
+}
+
+.conflict-banner {
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid #f59e0b;
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.8rem;
+  font-size: 0.82rem;
+  margin-bottom: 0.8rem;
+  color: #fbbf24;
+}
 
 .chip {
   padding: 0.1rem 0.4rem;
