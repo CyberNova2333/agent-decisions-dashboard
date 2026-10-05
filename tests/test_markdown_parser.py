@@ -119,5 +119,92 @@ def foo():
         self.assertEqual(parsed["title"], "标题")
         self.assertEqual(len(parsed["rounds"]), 1)
 
+    def test_multiline_rejection_reason_roundtrip(self):
+        """测试多行、含引号与破折号的 rejection_reason 无损序列化与往返解析 (R08)"""
+        reason = "第一行原因\n第二行原因：包含\"双引号\"和'单引号'以及 --- 破折号\n第三行结束"
+        serialized = self.parser.serialize_markdown(
+            topic_id="adr-rej",
+            title="否决测试",
+            lifecycle_badge="🔴 已否决",
+            decision_status="否决",
+            impl_status="不予实现",
+            priority="普通",
+            obj="架构",
+            func="规范",
+            core_content="方案已被正式否决。",
+            existing_rounds=[],
+            workflow_state="decided",
+            decision_outcome="rejected",
+            rejection_reason=reason,
+            version=2
+        )
+        parsed = self.parser.parse_markdown_text(serialized, default_id="adr-rej")
+        self.assertEqual(parsed["decision_outcome"], "rejected")
+        self.assertEqual(parsed["rejection_reason"], reason)
+
+    def test_code_comment_preserved_in_core_content(self):
+        """测试正文代码块内的 # 注释不被当作文档标题丢弃 (R08)"""
+        md = '''---
+schema_version: "2.0"
+id: "adr-code-comment"
+title: "代码注释测试"
+---
+
+# 代码注释测试
+
+## 核心论述与现实依据
+
+这是正文说明。
+
+````python
+# important comment: must not be stripped!
+def compute():
+    # another comment
+    return 42
+````
+
+正文结束。
+
+## 历史讨论与决策记录
+'''
+        parsed = self.parser.parse_markdown_text(md, default_id="adr-code-comment")
+        self.assertIn("# important comment: must not be stripped!", parsed["core_content"])
+        self.assertIn("# another comment", parsed["core_content"])
+
+    def test_subheading_in_user_opinion_not_false_round(self):
+        """测试用户意见内部的普通 ### 三级小标题不被误识别为讨论轮次分界 (R08)"""
+        md = '''---
+schema_version: "2.0"
+id: "adr-subheading"
+title: "子标题测试"
+---
+
+# 子标题测试
+
+## 核心论述与现实依据
+正文内容。
+
+## 历史讨论与决策记录
+
+### 第 1 轮定案与要求 (2026-10-05 15:00)
+- **变更说明**：首轮提交
+- **💡 用户意见（最新原话）**：
+我们在实现时需要注意以下几点：
+
+### Implementation notes
+- 步骤 1：准备配置
+- 步骤 2：启动服务
+
+### Testing requirements
+确保测试覆盖率大于 90%。
+- **🤖 团队答复（落实说明）**：收到要求。
+'''
+        parsed = self.parser.parse_markdown_text(md, default_id="adr-subheading")
+        # 必须仅有 1 轮讨论
+        self.assertEqual(len(parsed["rounds"]), 1)
+        self.assertEqual(parsed["rounds"][0]["title"], "第 1 轮定案与要求 (2026-10-05 15:00)")
+        self.assertIn("### Implementation notes", parsed["rounds"][0]["user_opinion"])
+        self.assertIn("### Testing requirements", parsed["rounds"][0]["user_opinion"])
+
 if __name__ == "__main__":
     unittest.main()

@@ -2,44 +2,129 @@
 """
 Agent Decisions Dashboard - Markdown Parser & Serializer
 单议题独立 Markdown 文件解析器与 N 轮追加序列化器
-支持 Frontmatter (schema_version: 2.0)、代码围栏容错与正交多维状态提取
+支持 Frontmatter (schema_version: 2.0)、代码围栏精确匹配、正文注释与三级标题保护、多维状态提取
 """
 
 import re
+import json
 import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
+
+
+def is_fence_start(line: str) -> Optional[Tuple[str, int]]:
+    """
+    判断一行是否开启了代码围栏 (CommonMark 规范: 0-3 空格前导, 至少 3 个 ` 或 ~)。
+    返回 (fence_char, fence_length) 或 None。
+    """
+    stripped_leading = line.lstrip(" ")
+    leading_spaces = len(line) - len(stripped_leading)
+    if leading_spaces > 3:
+        return None
+    if stripped_leading.startswith("```"):
+        m = re.match(r"^`{3,}", stripped_leading)
+        if m:
+            return ("`", len(m.group(0)))
+    elif stripped_leading.startswith("~~~"):
+        m = re.match(r"^~{3,}", stripped_leading)
+        if m:
+            return ("~", len(m.group(0)))
+    return None
+
+
+def is_fence_close(line: str, open_char: str, open_len: int) -> bool:
+    """
+    判断一行是否闭合了当前代码围栏。
+    闭合行必须以相同的字符开始，长度至少等于开启时的长度，且之后不能有除空格/制表符外的其他字符。
+    """
+    stripped_leading = line.lstrip(" ")
+    leading_spaces = len(line) - len(stripped_leading)
+    if leading_spaces > 3:
+        return False
+    pattern = rf"^{re.escape(open_char)}{{{open_len},}}[ \t]*$"
+    return bool(re.match(pattern, stripped_leading))
+
 
 class TopicMarkdownParser:
     @staticmethod
     def _parse_frontmatter(text: str) -> Tuple[Dict[str, Any], str]:
         """
-        解析 YAML Frontmatter 元数据块
+        解析 YAML Frontmatter 元数据块。
+        必须以独占一行的 --- 起始，并以独占一行的 --- 闭合。
+        支持 JSON 编码值（包括换行与引号转义）、YAML 块标量 | 以及标准标量值。
         返回 (metadata_dict, remaining_body)
         """
         metadata: Dict[str, Any] = {}
-        if not text.startswith("---"):
+        lines = text.splitlines(keepends=True)
+        if not lines:
             return metadata, text
 
-        parts = text.split("---", 2)
-        if len(parts) < 3:
+        # 检查首行是否是独占一行的 ---
+        first_line = lines[0].strip()
+        if first_line != "---":
             return metadata, text
 
-        front_raw = parts[1]
-        remaining = parts[2].lstrip("\r\n")
+        # 寻找闭合的独占一行的 ---
+        close_idx = -1
+        for i in range(1, len(lines)):
+            if lines[i].strip() == "---":
+                close_idx = i
+                break
 
-        for line in front_raw.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
+        if close_idx == -1:
+            # 没有闭合的分隔符，视为没有 frontmatter
+            return metadata, text
+
+        front_lines = [l.rstrip("\r\n") for l in lines[1:close_idx]]
+        remaining = "".join(lines[close_idx + 1:]).lstrip("\r\n")
+
+        i = 0
+        while i < len(front_lines):
+            line = front_lines[i]
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                i += 1
                 continue
+
             if ":" in line:
                 k, v = line.split(":", 1)
                 key = k.strip()
                 val = v.strip()
-                # 剥除可能的外层引号
-                if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
-                    val = val[1:-1]
-                # 尝试类型转换
+
+                # 支持 YAML 块标量 (| 或 >)
+                if val in ("|", ">", "|-", ">-", "|+", ">+"):
+                    block_lines = []
+                    i += 1
+                    while i < len(front_lines):
+                        next_line = front_lines[i]
+                        if next_line.startswith("  ") or next_line.startswith("\t"):
+                            indent = 2 if next_line.startswith("  ") else 1
+                            block_lines.append(next_line[indent:])
+                            i += 1
+                        elif not next_line.strip():
+                            block_lines.append("")
+                            i += 1
+                        else:
+                            break
+                    metadata[key] = "\n".join(block_lines).strip("\n")
+                    continue
+
+                # 优先解析 JSON 转义字符串 (例如 json.dumps 产物)
+                if val.startswith('"'):
+                    try:
+                        metadata[key] = json.loads(val)
+                        i += 1
+                        continue
+                    except json.JSONDecodeError:
+                        pass
+
+                # 单引号字符串
+                if val.startswith("'") and val.endswith("'") and len(val) >= 2:
+                    metadata[key] = val[1:-1].replace("''", "'")
+                    i += 1
+                    continue
+
+                # 布尔与数字转换
                 if val.isdigit():
                     metadata[key] = int(val)
                 elif val.lower() == "true":
@@ -47,26 +132,41 @@ class TopicMarkdownParser:
                 elif val.lower() == "false":
                     metadata[key] = False
                 else:
+                    if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+                        val = val[1:-1]
                     metadata[key] = val
+                i += 1
+            else:
+                i += 1
 
         return metadata, remaining
 
     @classmethod
     def count_rounds(cls, file_path: Path) -> int:
-        """极速统计单个 Markdown 文件中的讨论轮次数，具备代码围栏感知"""
+        """极速统计单个 Markdown 文件中的讨论轮次数，具备完备代码围栏感知"""
         if not file_path.exists():
             return 1
         try:
             content = file_path.read_text(encoding="utf-8").replace("\r\n", "\n")
-            in_code = False
+            open_char = None
+            open_len = 0
             round_nums = []
+
             for line in content.splitlines():
-                stripped = line.strip()
-                if stripped.startswith("```") or stripped.startswith("~~~"):
-                    in_code = not in_code
+                if open_char is not None:
+                    if is_fence_close(line, open_char, open_len):
+                        open_char = None
+                        open_len = 0
                     continue
-                if not in_code and stripped.startswith("###"):
-                    m = re.search(r'第\s*(\d+)\s*轮|Round\s*(\d+)', stripped, re.I)
+
+                fence_start = is_fence_start(line)
+                if fence_start:
+                    open_char, open_len = fence_start
+                    continue
+
+                stripped = line.strip()
+                if stripped.startswith("###"):
+                    m = re.search(r'###\s*(?:第\s*(\d+)\s*轮|Round\s*(\d+))', stripped, re.I)
                     if m:
                         val = m.group(1) or m.group(2)
                         round_nums.append(int(val))
@@ -98,22 +198,46 @@ class TopicMarkdownParser:
         topic_id = str(meta.get("id", "")).strip() or default_id
         title = str(meta.get("title", "")).strip()
 
-        # 提取标题（若 Frontmatter 未声明）
-        if not title:
-            title_match = re.search(r'(?m)^#\s+([^\n]+)', body)
-            title = title_match.group(1).strip() if title_match else topic_id
-
-        # 拆分 核心论述 与 历史讨论（具有代码块感知）
         lines = body.splitlines()
-        in_code = False
+
+        # 1. 提取标题（若 Frontmatter 未声明）：必须在代码围栏之外扫描
+        if not title:
+            open_char = None
+            open_len = 0
+            for line in lines:
+                if open_char is not None:
+                    if is_fence_close(line, open_char, open_len):
+                        open_char = None
+                        open_len = 0
+                    continue
+                fence_start = is_fence_start(line)
+                if fence_start:
+                    open_char, open_len = fence_start
+                    continue
+                if line.startswith("# ") and not line.startswith("## "):
+                    title = line[2:].strip()
+                    break
+        if not title:
+            title = topic_id
+
+        # 2. 拆分“核心论述”与“历史讨论”（具有完备代码块感知）
+        open_char = None
+        open_len = 0
         split_idx = -1
 
         for i, line in enumerate(lines):
-            stripped = line.strip()
-            if stripped.startswith("```") or stripped.startswith("~~~"):
-                in_code = not in_code
+            if open_char is not None:
+                if is_fence_close(line, open_char, open_len):
+                    open_char = None
+                    open_len = 0
                 continue
-            if not in_code and "## 历史讨论与决策记录" in stripped:
+
+            fence_start = is_fence_start(line)
+            if fence_start:
+                open_char, open_len = fence_start
+                continue
+
+            if line.strip().startswith("## 历史讨论与决策记录"):
                 split_idx = i
                 break
 
@@ -124,45 +248,79 @@ class TopicMarkdownParser:
             core_part = body
             history_part = ""
 
-        # 提炼核心内容
+        # 3. 提炼核心内容：必须有代码块保护，代码块内部的 '# comment' 绝不当作标题剔除
         core_lines = []
+        open_char = None
+        open_len = 0
         skip_header = True
+
         for line in core_part.splitlines():
+            if open_char is not None:
+                # 在代码块内，完全保留所有行
+                core_lines.append(line)
+                if is_fence_close(line, open_char, open_len):
+                    open_char = None
+                    open_len = 0
+                continue
+
+            fence_start = is_fence_start(line)
+            if fence_start:
+                open_char, open_len = fence_start
+                core_lines.append(line)
+                continue
+
             s = line.strip()
-            if s.startswith("# ") or s.startswith("> **锚点") or s.startswith("> **生命周期"):
+            # 过滤模板外框行
+            if s.startswith("# ") and not s.startswith("## "):
+                continue
+            if s.startswith("> **锚点") or s.startswith("> **生命周期"):
                 continue
             if "## 核心论述与现实依据" in s:
                 skip_header = False
                 continue
             core_lines.append(line)
+
         core_content = "\n".join(core_lines).strip()
 
-        # 解析历史轮次（带代码块安全隔离）
+        # 4. 解析历史轮次（严密的代码块安全隔离与仅匹配真实轮次标题）
         rounds: List[Dict[str, Any]] = []
         if history_part.strip():
             hist_lines = history_part.splitlines()
             current_round_title = None
             current_round_lines: List[str] = []
-            in_hist_code = False
+            open_char = None
+            open_len = 0
 
             for line in hist_lines:
-                s = line.strip()
-                if s.startswith("```") or s.startswith("~~~"):
-                    in_hist_code = not in_hist_code
-                    if current_round_title:
+                if open_char is not None:
+                    if is_fence_close(line, open_char, open_len):
+                        open_char = None
+                        open_len = 0
+                    if current_round_title is not None:
                         current_round_lines.append(line)
                     continue
 
-                if not in_hist_code and s.startswith("### "):
-                    if current_round_title:
+                fence_start = is_fence_start(line)
+                if fence_start:
+                    open_char, open_len = fence_start
+                    if current_round_title is not None:
+                        current_round_lines.append(line)
+                    continue
+
+                s = line.strip()
+                # 只有符合轮次标题模式（例如 '### 第 1 轮...' 或 '### Round 1...'）才作为新轮次分界
+                # 普通的 ### Subheading （如用户意见内的 ### Implementation notes）保留在轮次内部
+                if re.match(r"^###\s+(?:第\s*\d+\s*轮.*|Round\s*\d+.*)", s, re.I):
+                    if current_round_title is not None:
                         rounds.append(cls._build_round_dict(current_round_title, current_round_lines))
-                    current_round_title = s[4:].strip()
+                    # 去掉前导 '### '
+                    current_round_title = re.sub(r"^###\s+", "", s).strip()
                     current_round_lines = []
                 else:
-                    if current_round_title:
+                    if current_round_title is not None:
                         current_round_lines.append(line)
 
-            if current_round_title:
+            if current_round_title is not None:
                 rounds.append(cls._build_round_dict(current_round_title, current_round_lines))
 
         # 旧版引用块补充提取（若 Frontmatter 缺省）
@@ -176,7 +334,7 @@ class TopicMarkdownParser:
         version = meta.get("version", 1)
 
         if not meta:
-            # 从旧版引用块精准提取
+            # 从旧版引用块提取
             for key, attr in [
                 ("所属对象", "object"),
                 ("业务功能", "function"),
@@ -223,28 +381,74 @@ class TopicMarkdownParser:
 
     @staticmethod
     def _build_round_dict(title: str, lines: List[str]) -> Dict[str, Any]:
-        """提炼轮次内容并分离用户原话与答复"""
+        """提炼轮次内容并分离用户原话与答复，具备完备代码围栏感知"""
         body = "\n".join(lines).strip()
-        user_op = ""
-        agent_rep = ""
-        commit_msg = ""
+        user_lines: List[str] = []
+        agent_lines: List[str] = []
+        commit_lines: List[str] = []
 
-        # 提取字段
-        user_m = re.search(r'(?m)^-\s+\*\*.*?用户.*?\*\*[：:]?[ \t]*(.+?)(?=\n- \*\*|\Z)', body, re.S)
-        if user_m: user_op = user_m.group(1).strip()
+        current_target = None  # "user", "agent", "commit"
+        open_char = None
+        open_len = 0
 
-        agent_m = re.search(r'(?m)^-\s+\*\*.*?(?:答复|落实).*?\*\*[：:]?[ \t]*(.+?)(?=\n- \*\*|\Z)', body, re.S)
-        if agent_m: agent_rep = agent_m.group(1).strip()
+        for line in lines:
+            if open_char is not None:
+                if is_fence_close(line, open_char, open_len):
+                    open_char = None
+                    open_len = 0
+                if current_target == "user":
+                    user_lines.append(line)
+                elif current_target == "agent":
+                    agent_lines.append(line)
+                elif current_target == "commit":
+                    commit_lines.append(line)
+                continue
 
-        commit_m = re.search(r'(?m)^-\s+\*\*.*?变更说明.*?\*\*[：:]?[ \t]*(.+?)(?=\n- \*\*|\Z)', body, re.S)
-        if commit_m: commit_msg = commit_m.group(1).strip()
+            fence_start = is_fence_start(line)
+            if fence_start:
+                open_char, open_len = fence_start
+                if current_target == "user":
+                    user_lines.append(line)
+                elif current_target == "agent":
+                    agent_lines.append(line)
+                elif current_target == "commit":
+                    commit_lines.append(line)
+                continue
+
+            # 围栏之外检测字段标头
+            user_m = re.match(r"^-\s+\*\*.*?用户.*?\*\*[：:]?[ \t]*(.*)", line)
+            agent_m = re.match(r"^-\s+\*\*.*?(?:答复|落实).*?\*\*[：:]?[ \t]*(.*)", line)
+            commit_m = re.match(r"^-\s+\*\*.*?变更说明.*?\*\*[：:]?[ \t]*(.*)", line)
+
+            if user_m:
+                current_target = "user"
+                rest = user_m.group(1).strip()
+                if rest:
+                    user_lines.append(rest)
+            elif agent_m:
+                current_target = "agent"
+                rest = agent_m.group(1).strip()
+                if rest:
+                    agent_lines.append(rest)
+            elif commit_m:
+                current_target = "commit"
+                rest = commit_m.group(1).strip()
+                if rest:
+                    commit_lines.append(rest)
+            else:
+                if current_target == "user":
+                    user_lines.append(line)
+                elif current_target == "agent":
+                    agent_lines.append(line)
+                elif current_target == "commit":
+                    commit_lines.append(line)
 
         return {
             "title": title,
             "content": body,
-            "user_opinion": user_op,
-            "agent_reply": agent_rep,
-            "commit_message": commit_msg
+            "user_opinion": "\n".join(user_lines).strip(),
+            "agent_reply": "\n".join(agent_lines).strip(),
+            "commit_message": "\n".join(commit_lines).strip()
         }
 
     @staticmethod
@@ -273,26 +477,27 @@ class TopicMarkdownParser:
         """
         序列化生成符合规范的单议题 Markdown：
         采用 Frontmatter (schema_version: 2.0) 机器元数据 + 人类友好展示双重结构，
-        严密保护代码围栏与用户多行原话，追加第 n 轮讨论记录
+        严密保护代码围栏与用户多行原话，追加第 n 轮讨论记录。
+        所有字符串字段采用 JSON 规范安全转义，杜绝换行、引号与 --- 冲撞。
         """
         # 1. 结构化 YAML Frontmatter
         front = [
             "---",
             'schema_version: "2.0"',
-            f'id: "{topic_id}"',
-            f'title: "{title}"',
+            f'id: {json.dumps(topic_id, ensure_ascii=False)}',
+            f'title: {json.dumps(title, ensure_ascii=False)}',
             f'version: {version}',
-            f'section: "{section}"',
-            f'object: "{obj}"',
-            f'function: "{func}"',
-            f'priority: "{priority}"',
-            f'workflow_state: "{workflow_state}"',
-            f'decision_outcome: "{decision_outcome}"',
-            f'rejection_reason: "{rejection_reason}"',
-            f'superseded_by: "{superseded_by}"',
-            f'implementation_state: "{implementation_state}"',
-            f'impl_commit: "{impl_commit}"',
-            f'impl_verifier: "{impl_verifier}"',
+            f'section: {json.dumps(section, ensure_ascii=False)}',
+            f'object: {json.dumps(obj, ensure_ascii=False)}',
+            f'function: {json.dumps(func, ensure_ascii=False)}',
+            f'priority: {json.dumps(priority, ensure_ascii=False)}',
+            f'workflow_state: {json.dumps(workflow_state, ensure_ascii=False)}',
+            f'decision_outcome: {json.dumps(decision_outcome, ensure_ascii=False)}',
+            f'rejection_reason: {json.dumps(rejection_reason, ensure_ascii=False)}',
+            f'superseded_by: {json.dumps(superseded_by, ensure_ascii=False)}',
+            f'implementation_state: {json.dumps(implementation_state, ensure_ascii=False)}',
+            f'impl_commit: {json.dumps(impl_commit, ensure_ascii=False)}',
+            f'impl_verifier: {json.dumps(impl_verifier, ensure_ascii=False)}',
             "---",
             ""
         ]
