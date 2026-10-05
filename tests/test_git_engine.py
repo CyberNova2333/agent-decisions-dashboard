@@ -115,5 +115,74 @@ class TestGitEngine(unittest.TestCase):
             if lock_file.exists():
                 lock_file.unlink()
 
+    def test_interleaved_staging_race_defense(self):
+        """测试预检与提交之间外部进程插入 git add 时，绝不污染提交 (R10)"""
+        unrelated_file = self.repo_dir / "user_work.py"
+        unrelated_file.write_text("critical_secret = 42\n", encoding="utf-8")
+
+        decision_file = self.repo_dir / "decisions" / "adr-race.md"
+        decision_file.parent.mkdir(parents=True, exist_ok=True)
+        decision_file.write_text("# Decision\n", encoding="utf-8")
+
+        # 模拟在执行提交过程中发生外部暂存
+        subprocess.run(["git", "add", "user_work.py"], cwd=str(self.repo_dir), check=True, capture_output=True)
+
+        res = self.engine.commit_decision(
+            topic_title="竞态保护测试",
+            lifecycle_badge="🟢 已决策",
+            summary="竞态测试",
+            staged_files=[decision_file]
+        )
+
+        # 必须拒绝自动提交，保护用户的 user_work.py
+        self.assertFalse(res.success)
+        self.assertEqual(res.status, "skipped_unrelated_staged")
+        self.assertIn("user_work.py", res.unrelated_files)
+
+        # 检查最新提交，绝不包含 user_work.py
+        last_commit_files = subprocess.run(
+            ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"],
+            cwd=str(self.repo_dir),
+            capture_output=True,
+            text=True
+        ).stdout
+        self.assertNotIn("user_work.py", last_commit_files)
+
+    def test_revision_is_persisted_inside_git_head_database(self):
+        """测试提交至 Git 的 decisions.db 中包含本次生成的 Revision 快照 (R10)"""
+        import sqlite3
+        from core.decision_service import DecisionService
+
+        # 启用 Git 自动提交
+        service_cfg = Config({"git_commit": {"enabled": True}}, base_dir=self.repo_dir)
+        service = DecisionService(service_cfg)
+
+        save_res = service.save_topic(
+            topic_id="adr-git-rev",
+            data={"title": "快照同步测试", "workflow_state": "decided"}
+        )
+        self.assertEqual(save_res["git_status"], "committed")
+
+        # 从 Git HEAD 中直接导出 decisions.db
+        git_db_bytes = subprocess.run(
+            ["git", "show", "HEAD:decisions.db"],
+            cwd=str(self.repo_dir),
+            capture_output=True,
+            check=True
+        ).stdout
+
+        temp_db_path = self.repo_dir / "temp_head_check.db"
+        temp_db_path.write_bytes(git_db_bytes)
+
+        # 检查导出的 Git HEAD decisions.db 中 revisions 表不为空且包含对应记录
+        conn = sqlite3.connect(str(temp_db_path))
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        rows = cur.execute("SELECT * FROM revisions").fetchall()
+        conn.close()
+
+        self.assertGreater(len(rows), 0)
+        self.assertEqual(rows[-1]["rev_hash"], save_res["revision_hash"])
+
 if __name__ == "__main__":
     unittest.main()

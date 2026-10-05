@@ -229,8 +229,24 @@ class GitEngine:
                     message="执行 git add 暂存文件失败"
                 )
 
-        # 5. 执行提交
-        success, out, err = self.run_git(["commit", "-m", commit_msg])
+        # 5. 提交前二次安全校验：防止暂存区预检后发生外部并发 git add 竞态 (R10)
+        current_staged = self.get_staged_files()
+        unrelated_staged = [f for f in current_staged if f not in target_rel_files]
+        if unrelated_staged:
+            return GitCommitResult(
+                success=False,
+                status="skipped_unrelated_staged",
+                commit_hash=self.get_head_hash(),
+                message=f"检测到并发暂存冲突：存在 {len(unrelated_staged)} 个非台账文件已暂存，为保护工作区，已跳过自动提交。",
+                unrelated_files=unrelated_staged
+            )
+
+        # 6. 执行提交：必须通过 pathspec 显式限定本次提交的文件范围，杜绝夹带任何外界暂存 (R10)
+        commit_cmd = ["commit", "-m", commit_msg]
+        if target_rel_files:
+            commit_cmd.extend(["--"] + sorted(list(target_rel_files)))
+
+        success, out, err = self.run_git(commit_cmd)
         if success:
             head = self.get_head_hash(short=True)
             return GitCommitResult(
