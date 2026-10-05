@@ -75,7 +75,8 @@ class DatabaseManager:
                     superseded_by TEXT DEFAULT '',                -- 被哪个议题所替代 (ID)
                     implementation_state TEXT DEFAULT 'not_started', -- 'not_started', 'in_progress', 'implemented', 'verified'
                     impl_commit TEXT DEFAULT '',                  -- 实现提交 Hash / PR
-                    impl_verifier TEXT DEFAULT ''                 -- 核验人或核验证据说明
+                    impl_verifier TEXT DEFAULT '',                -- 核验人或核验证据说明
+                    last_request_id TEXT DEFAULT ''               -- 最近一次成功写入的请求操作 ID (F01)
                 )
             """)
 
@@ -89,7 +90,8 @@ class DatabaseManager:
                 ("superseded_by", "TEXT DEFAULT ''"),
                 ("implementation_state", "TEXT DEFAULT 'not_started'"),
                 ("impl_commit", "TEXT DEFAULT ''"),
-                ("impl_verifier", "TEXT DEFAULT ''")
+                ("impl_verifier", "TEXT DEFAULT ''"),
+                ("last_request_id", "TEXT DEFAULT ''")
             ]
             for col_name, col_type in migrations:
                 if col_name not in existing_cols:
@@ -186,12 +188,20 @@ class DatabaseManager:
             row = cursor.execute("SELECT * FROM topics WHERE id = ?", (topic_id,)).fetchone()
             return dict(row) if row else None
 
+    def get_topic_max_version(self, topic_id: str) -> int:
+        """获取议题的历史最高代次（高水位号），即便议题已被回滚删除，序列号亦不倒退 (F04, U10)"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            row = cursor.execute("SELECT max_version FROM topic_version_seq WHERE topic_id = ?", (topic_id,)).fetchone()
+            return row["max_version"] if row and row["max_version"] is not None else 0
+
     def upsert_topic(
         self,
         data: Dict[str, Any],
         expected_version: Optional[int] = None,
         exact_version: Optional[int] = None,
-        conn: Optional[sqlite3.Connection] = None
+        conn: Optional[sqlite3.Connection] = None,
+        request_id: Optional[str] = None
     ) -> int:
         """
         插入或更新单个议题，支持乐观锁版本检查与外部连接复用：
@@ -200,6 +210,7 @@ class DatabaseManager:
         返回更新后的版本号 (int)
         """
         now_iso = datetime.datetime.now().isoformat()
+        last_req_id = (request_id or data.get("last_request_id") or "").strip()
         
         # 字段映射与正交三态自动推导
         wf_state = data.get("workflow_state") or data.get("lifecycle_status") or "discussing"
@@ -244,7 +255,8 @@ class DatabaseManager:
                             lifecycle_status=?, decision_status=?, impl_status=?, priority=?,
                             content=?, sources=?, discussion_json=?, updated_at=?,
                             version=?, workflow_state=?, decision_outcome=?, rejection_reason=?,
-                            superseded_by=?, implementation_state=?, impl_commit=?, impl_verifier=?
+                            superseded_by=?, implementation_state=?, impl_commit=?, impl_verifier=?,
+                            last_request_id=?
                         WHERE id = ? AND version = ?
                     """, (
                         data.get("title", ""),
@@ -267,6 +279,7 @@ class DatabaseManager:
                         impl_state,
                         impl_commit,
                         impl_verifier,
+                        last_req_id,
                         topic_id,
                         expected_version
                     ))
@@ -301,8 +314,9 @@ class DatabaseManager:
                     lifecycle_status, decision_status, impl_status, priority,
                     content, sources, discussion_json, updated_at,
                     version, workflow_state, decision_outcome, rejection_reason,
-                    superseded_by, implementation_state, impl_commit, impl_verifier
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    superseded_by, implementation_state, impl_commit, impl_verifier,
+                    last_request_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     title=excluded.title,
                     section=excluded.section,
@@ -323,7 +337,8 @@ class DatabaseManager:
                     superseded_by=excluded.superseded_by,
                     implementation_state=excluded.implementation_state,
                     impl_commit=excluded.impl_commit,
-                    impl_verifier=excluded.impl_verifier
+                    impl_verifier=excluded.impl_verifier,
+                    last_request_id=excluded.last_request_id
             """, (
                 topic_id,
                 data.get("title", ""),
@@ -345,7 +360,8 @@ class DatabaseManager:
                 superseded_by,
                 impl_state,
                 impl_commit,
-                impl_verifier
+                impl_verifier,
+                last_req_id
             ))
             cursor.execute("""
                 INSERT INTO topic_version_seq (topic_id, max_version) VALUES (?, ?)
