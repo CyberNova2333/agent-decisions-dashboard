@@ -111,6 +111,14 @@ class DatabaseManager:
             if "status" not in ik_cols:
                 cursor.execute("ALTER TABLE idempotency_keys ADD COLUMN status TEXT DEFAULT 'completed'")
 
+            # 议题版本代次单调递增高水位序列表，防止删除与回滚后复用 ABA 并发令牌 (F05)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS topic_version_seq (
+                    topic_id TEXT PRIMARY KEY,
+                    max_version INTEGER NOT NULL
+                )
+            """)
+
             # 版本历史与不可篡改快照链 (Git-like Revisions)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS revisions (
@@ -269,6 +277,10 @@ class DatabaseManager:
                             expected_version=expected_version,
                             topic_id=topic_id
                         )
+                    cursor.execute("""
+                        INSERT INTO topic_version_seq (topic_id, max_version) VALUES (?, ?)
+                        ON CONFLICT(topic_id) DO UPDATE SET max_version = MAX(max_version, excluded.max_version)
+                    """, (topic_id, new_version))
                     return new_version
             else:
                 if expected_version is not None:
@@ -277,7 +289,11 @@ class DatabaseManager:
                         expected_version=expected_version,
                         topic_id=topic_id
                     )
-                new_version = exact_version if exact_version is not None else 1
+                if exact_version is not None:
+                    new_version = exact_version
+                else:
+                    seq_row = cursor.execute("SELECT max_version FROM topic_version_seq WHERE topic_id = ?", (topic_id,)).fetchone()
+                    new_version = (seq_row["max_version"] + 1) if seq_row else 1
 
             cursor.execute("""
                 INSERT INTO topics (
@@ -331,6 +347,10 @@ class DatabaseManager:
                 impl_commit,
                 impl_verifier
             ))
+            cursor.execute("""
+                INSERT INTO topic_version_seq (topic_id, max_version) VALUES (?, ?)
+                ON CONFLICT(topic_id) DO UPDATE SET max_version = MAX(max_version, excluded.max_version)
+            """, (topic_id, new_version))
             return new_version
 
         if conn is not None:
@@ -538,10 +558,12 @@ class DatabaseManager:
             target_summary = row["summary"]
             snapshot = json.loads(row["snapshot_json"])
 
-            # 获取回滚前各议题已知最新版本号，以分配单调递增版本，防止 ABA 并发令牌复用 (F08)
+            # 获取历史最高写入代次（查持久序列 topic_version_seq 与当前 topics，杜绝删除与回滚后的 ABA 并发令牌复用） (F08, F05)
             current_max_versions = {}
+            for r in cursor.execute("SELECT topic_id, max_version FROM topic_version_seq").fetchall():
+                current_max_versions[r["topic_id"]] = r["max_version"]
             for r in cursor.execute("SELECT id, version FROM topics").fetchall():
-                current_max_versions[r["id"]] = r["version"] or 1
+                current_max_versions[r["id"]] = max(current_max_versions.get(r["id"], 0), r["version"] or 1)
 
             # 清空当前业务表并按快照恢复 (复用当前写连接以避免自死锁)
             cursor.execute("DELETE FROM topics")

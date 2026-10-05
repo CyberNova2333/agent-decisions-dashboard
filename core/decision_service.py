@@ -609,34 +609,18 @@ class DecisionService:
 
     def rollback_full(self, rev_id: int, author: str = "人类/Agent") -> Dict[str, Any]:
         """
-        P1-C: 全库恢复至指定快照，同时清理目标快照外的多余文件并保持字段完整 (R05, R06)
+        P1-C: 全库恢复至指定快照，同时清理目标快照外的多余文件并保持字段完整 (R05, R06, F04)
         """
-        res = self.db.rollback_revision(rev_id, author)
-        snapshot = res["snapshot"]
-
+        # 0. 预检快照有效性及路径安全，在产生任何状态变更前完成强校验 (F04, I07)
+        rev_row = self.db.get_revision_by_id(rev_id)
+        if not rev_row:
+            raise ValueError(f"未找到指定的版本快照 #{rev_id}")
+        snapshot = json.loads(rev_row["snapshot_json"])
         target_topics = snapshot.get("topics", [])
-        target_ids = {t["id"] for t in target_topics}
-
-        staged_files = [self.config.metadata_json_path, self.config.database_path]
-
-        # 1. 处理快照之外的多余现存文件：移入归档区并暂存 Git 删除，防止重启或重建时复活 (R05)
-        archive_dir = self.config.decisions_dir / ".archived_rollback"
-        if self.config.decisions_dir.exists():
-            for p in self.config.decisions_dir.glob("*.md"):
-                if p.stem not in target_ids:
-                    archive_dir.mkdir(parents=True, exist_ok=True)
-                    archive_target = archive_dir / f"{p.stem}_{uuid.uuid4().hex[:6]}.md"
-                    try:
-                        shutil.move(str(p), str(archive_target))
-                        staged_files.append(p)
-                    except Exception as e:
-                        # 绝不静默删除源文件！必须保留原文件并中止破坏性操作 (F07)
-                        raise OSError(f"归档孤儿文件失败: {p.name} -> {e}") from e
-
-        # 2. 写回快照中的所有 Markdown 文件 (原子替换并保持完整字段)
         resolved_decisions_dir = self.config.decisions_dir.resolve()
+
         for t in target_topics:
-            tid = t["id"]
+            tid = t.get("id", "")
             if not re.match(r'^[a-zA-Z0-9_\-]+$', tid):
                 raise ValueError(f"快照中包含非法的议题 ID: [{tid}]")
             md_file = (self.config.decisions_dir / f"{tid}.md").resolve()
@@ -644,6 +628,41 @@ class DecisionService:
                 md_file.relative_to(resolved_decisions_dir)
             except ValueError:
                 raise ValueError(f"检测到非法路径越界: [{tid}]")
+
+        target_ids = {t["id"] for t in target_topics}
+
+        # 1. 处理快照之外的多余现存文件：移入归档区并暂存 Git 删除，归档失败必须还原文件并终止，绝不影响数据库 (F04, F07, I08)
+        archive_dir = self.config.decisions_dir / ".archived_rollback"
+        archived_moves = []
+        staged_files = [self.config.metadata_json_path, self.config.database_path]
+
+        if self.config.decisions_dir.exists():
+            for p in self.config.decisions_dir.glob("*.md"):
+                if p.stem not in target_ids:
+                    archive_dir.mkdir(parents=True, exist_ok=True)
+                    archive_target = archive_dir / f"{p.stem}_{uuid.uuid4().hex[:6]}.md"
+                    try:
+                        shutil.move(str(p), str(archive_target))
+                        archived_moves.append((archive_target, p))
+                        staged_files.append(p)
+                    except Exception as e:
+                        # 归档失败时还原已移动的文件，中止破坏性操作，绝不改变数据库 (F04, F07, I08)
+                        for moved_target, orig_src in reversed(archived_moves):
+                            try:
+                                shutil.move(str(moved_target), str(orig_src))
+                            except Exception:
+                                pass
+                        raise OSError(f"归档孤儿文件失败: {p.name} -> {e}") from e
+
+        # 2. 校验与文件归档全部成功后，原子执行数据库回滚
+        res = self.db.rollback_revision(rev_id, author)
+        snapshot = res["snapshot"]
+        target_topics = snapshot.get("topics", [])
+
+        # 3. 写回快照中的所有 Markdown 文件 (原子替换并保持完整字段)
+        for t in target_topics:
+            tid = t["id"]
+            md_file = (self.config.decisions_dir / f"{tid}.md").resolve()
             wf_state = t.get("workflow_state") or t.get("lifecycle_status", "discussing")
             badge = self.get_lifecycle_badge(wf_state)
             rounds = self._reconstruct_rounds_from_topic(t)
