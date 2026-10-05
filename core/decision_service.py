@@ -133,14 +133,14 @@ class DecisionService:
                 is_interrupted_prior_attempt = True
                 allocated_version = prep_allocated_ver
             else:
-                is_interrupted_prior_attempt = True
-                allocated_version = prep_allocated_ver if prep_allocated_ver is not None else (current_db_ver + 1 if existing_row else initial_version)
+                prep_expected_ver = cached_prep.get("expected_version")
+                effective_expected = expected_version if expected_version is not None else prep_expected_ver
                 if existing_row:
                     current_ver = existing_row.get("version", 1)
-                    if expected_version is not None and expected_version != current_ver:
+                    if effective_expected is not None and effective_expected != current_ver:
                         raise VersionConflictError(
                             current_version=current_ver,
-                            expected_version=expected_version,
+                            expected_version=effective_expected,
                             topic_id=topic_id
                         )
                 else:
@@ -150,6 +150,8 @@ class DecisionService:
                             expected_version=expected_version,
                             topic_id=topic_id
                         )
+                is_interrupted_prior_attempt = True
+                allocated_version = prep_allocated_ver if prep_allocated_ver is not None else (current_db_ver + 1 if existing_row else initial_version)
         else:
             if existing_row:
                 current_ver = existing_row.get("version", 1)

@@ -287,8 +287,11 @@ class RecoveryManager:
                     cursor.execute("DELETE FROM topics WHERE id = ?", (tid,))
 
             for item in parsed_items:
-                # 明确指定 exact_version，保持文件固有版本号，多次重建绝不累加版本 (R04)
-                self.db.upsert_topic(item["data"], exact_version=item["version"], conn=conn)
+                tid = item["id"]
+                existing_row = cursor.execute("SELECT last_request_id FROM topics WHERE id = ?", (tid,)).fetchone()
+                last_req = existing_row["last_request_id"] if existing_row and existing_row["last_request_id"] else ""
+                # 明确指定 exact_version，保持文件固有版本号，多次重建绝不累加版本 (R04) 且保留请求归属 (R08)
+                self.db.upsert_topic(item["data"], exact_version=item["version"], conn=conn, request_id=last_req)
             conn.commit()
 
         # 3. 若重建后存在议题且快照链为空，建立初始基线快照以供撤销 (U14)
