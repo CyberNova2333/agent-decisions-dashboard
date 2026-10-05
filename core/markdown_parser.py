@@ -74,7 +74,7 @@ class TopicMarkdownParser:
                 return max(round_nums)
         except Exception:
             pass
-        return 1
+        return 0
 
     @classmethod
     def parse_markdown_file(cls, file_path: Path) -> Optional[Dict[str, Any]]:
@@ -176,12 +176,24 @@ class TopicMarkdownParser:
         version = meta.get("version", 1)
 
         if not meta:
-            # 从旧版 > **锚点 ID** 提取
-            obj_m = re.search(r'所属对象[：:]\s*`?([^`|\n]+)`?', core_part)
-            if obj_m: obj = obj_m.group(1).strip()
-            func_m = re.search(r'业务功能[：:]\s*`?([^`|\n]+)`?', core_part)
-            if func_m: func = func_m.group(1).strip()
-            lc_m = re.search(r'生命周期[：:]\s*`?([^`|\n]+)`?', core_part)
+            # 从旧版引用块精准提取
+            for key, attr in [
+                ("所属对象", "object"),
+                ("业务功能", "function"),
+                ("决策状态", "decision_status"),
+                ("实现现状", "impl_status"),
+                ("优先级", "priority")
+            ]:
+                m = re.search(r'\*\*' + key + r'\*\*[：:]\s*`?([^`|\n]+)`?', core_part)
+                if m:
+                    val = m.group(1).strip()
+                    if attr == "object": obj = val
+                    elif attr == "function": func = val
+                    elif attr == "decision_status": dec_status = val
+                    elif attr == "impl_status": impl_state = val
+                    elif attr == "priority": priority = val
+
+            lc_m = re.search(r'\*\*生命周期\*\*[：:]\s*`?([^`|\n]+)`?', core_part)
             if lc_m:
                 lc_text = lc_m.group(1).strip()
                 if "已决策" in lc_text: wf_state = "decided"
@@ -218,13 +230,13 @@ class TopicMarkdownParser:
         commit_msg = ""
 
         # 提取字段
-        user_m = re.search(r'(?m)^-\s+\*\*.*?用户.*?[：:]\*\*[ \t]*(.+?)(?=\n- \*\*|\Z)', body, re.S)
+        user_m = re.search(r'(?m)^-\s+\*\*.*?用户.*?\*\*[：:]?[ \t]*(.+?)(?=\n- \*\*|\Z)', body, re.S)
         if user_m: user_op = user_m.group(1).strip()
 
-        agent_m = re.search(r'(?m)^-\s+\*\*.*?答复.*?[：:]\*\*[ \t]*(.+?)(?=\n- \*\*|\Z)', body, re.S)
+        agent_m = re.search(r'(?m)^-\s+\*\*.*?(?:答复|落实).*?\*\*[：:]?[ \t]*(.+?)(?=\n- \*\*|\Z)', body, re.S)
         if agent_m: agent_rep = agent_m.group(1).strip()
 
-        commit_m = re.search(r'(?m)^-\s+\*\*.*?变更说明.*?[：:]\*\*[ \t]*(.+?)(?=\n- \*\*|\Z)', body, re.S)
+        commit_m = re.search(r'(?m)^-\s+\*\*.*?变更说明.*?\*\*[：:]?[ \t]*(.+?)(?=\n- \*\*|\Z)', body, re.S)
         if commit_m: commit_msg = commit_m.group(1).strip()
 
         return {

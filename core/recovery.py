@@ -47,10 +47,9 @@ class RecoveryManager:
                 parsed = self.parser.parse_markdown_file(file_path)
                 if parsed:
                     disk_rounds = len(parsed["rounds"])
-                    db_rounds = len(parsed.get("rounds", []))
                     disk_ver = parsed.get("version", 1)
                     db_ver = db_t.get("version", 1)
-                    if disk_ver != db_ver or disk_rounds != self.parser.count_rounds(file_path):
+                    if disk_ver != db_ver:
                         desynced_topics.append({
                             "id": tid,
                             "title": db_t["title"],
