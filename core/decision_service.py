@@ -880,6 +880,7 @@ class DecisionService:
 
             # 2. 校验与文件归档全部成功后，原子执行数据库回滚
             res = self.db.rollback_revision(rev_id, author)
+            target_topics = res.get("snapshot", {}).get("topics", [])
 
             # 3. 写回快照中的所有 Markdown 文件 (原子替换并保持完整字段)
             for t in target_topics:
