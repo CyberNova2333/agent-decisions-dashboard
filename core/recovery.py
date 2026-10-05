@@ -81,13 +81,33 @@ class RecoveryManager:
                     db_ver = db_t.get("version", 1)
                     disk_rounds = len(parsed["rounds"])
 
-                    # 提取 DB 端的讨论 rounds 用于比对
+                    # 提取 DB 端的讨论 rounds 用于比对 (F10)
                     db_discussion = []
                     if db_t.get("discussion_json"):
                         try:
-                            db_discussion = json.loads(db_t["discussion_json"])
+                            raw_disc = db_t["discussion_json"]
+                            db_discussion = json.loads(raw_disc) if isinstance(raw_disc, str) else raw_disc
                         except Exception:
                             db_discussion = []
+
+                    db_rounds_reconstructed = []
+                    if db_discussion:
+                        rounds_map: Dict[int, Dict[str, Any]] = {}
+                        for d in db_discussion:
+                            k = d.get("key", "")
+                            v = d.get("val", "")
+                            m = re.search(r'第\s*(\d+)\s*轮', k)
+                            if m:
+                                r_num = int(m.group(1))
+                                if r_num not in rounds_map:
+                                    rounds_map[r_num] = {"title": f"第 {r_num} 轮", "user_opinion": "", "agent_reply": "", "commit_message": ""}
+                                if "用户" in k: rounds_map[r_num]["user_opinion"] = v
+                                elif "答复" in k or "落实" in k: rounds_map[r_num]["agent_reply"] = v
+                                elif "变更" in k: rounds_map[r_num]["commit_message"] = v
+                            else:
+                                rounds_map[len(rounds_map) + 1] = {"title": k, "user_opinion": v, "agent_reply": "", "commit_message": ""}
+                        for r_num in sorted(rounds_map.keys()):
+                            db_rounds_reconstructed.append(rounds_map[r_num])
 
                     disk_digest = self._compute_digest(parsed, parsed.get("core_content", ""), parsed.get("rounds", []))
                     
@@ -107,7 +127,7 @@ class RecoveryManager:
                         "impl_verifier": db_t.get("impl_verifier", ""),
                         "version": db_ver
                     }
-                    db_digest = self._compute_digest(db_t_norm, db_t.get("content", ""), parsed.get("rounds", []))
+                    db_digest = self._compute_digest(db_t_norm, db_t.get("content", ""), db_rounds_reconstructed)
 
                     if disk_ver != db_ver or disk_digest != db_digest:
                         desynced_topics.append({
@@ -125,7 +145,7 @@ class RecoveryManager:
             if tid not in disk_files:
                 missing_markdown.append(tid)
 
-        # 3. 检查 metadata.json 同步状态与字段一致性 (R04)
+        # 3. 检查 metadata.json 同步状态与字段一致性 (R04, F10)
         meta_synced = True
         meta_count = 0
         if self.config.metadata_json_path.exists():
@@ -142,10 +162,13 @@ class RecoveryManager:
                             meta_synced = False
                             break
                         dbt = db_topics[mid]
-                        # 比对关键业务字段
+                        # 全量比对关键业务字段 (F10)
                         if mt.get("title") != dbt.get("title") or \
                            mt.get("version") != dbt.get("version") or \
                            mt.get("workflow_state") != (dbt.get("workflow_state") or dbt.get("lifecycle_status")) or \
+                           mt.get("decision_outcome") != dbt.get("decision_outcome") or \
+                           mt.get("implementation_state") != dbt.get("implementation_state") or \
+                           mt.get("priority") != dbt.get("priority") or \
                            mt.get("section") != dbt.get("section"):
                             meta_synced = False
                             break
@@ -251,11 +274,13 @@ class RecoveryManager:
         # 2. 在同一事务中原子替换当前索引投影 (保留历史 Revisions)
         with self.db.get_connection() as conn:
             cursor = conn.cursor()
-            if seen_ids:
-                placeholders = ",".join("?" for _ in seen_ids)
-                cursor.execute(f"DELETE FROM topics WHERE id NOT IN ({placeholders})", list(seen_ids))
-            else:
-                cursor.execute("DELETE FROM topics")
+            # 仅删除磁盘对应文件确实已不存在的议题，绝不将临时读取失败的文件误判为删除 (F09)
+            existing_rows = cursor.execute("SELECT id FROM topics").fetchall()
+            for erow in existing_rows:
+                tid = erow["id"]
+                target_md = decisions_dir / f"{tid}.md"
+                if not target_md.exists():
+                    cursor.execute("DELETE FROM topics WHERE id = ?", (tid,))
 
             for item in parsed_items:
                 # 明确指定 exact_version，保持文件固有版本号，多次重建绝不累加版本 (R04)
@@ -266,12 +291,13 @@ class RecoveryManager:
         self.sync_metadata_json()
 
         rebuilt_ids = [item["id"] for item in parsed_items]
+        status = "success" if not errors else "partial"
         return {
-            "status": "success",
+            "status": status,
             "rebuilt_count": len(rebuilt_ids),
             "rebuilt_ids": rebuilt_ids,
             "errors": errors,
-            "message": f"成功从 Markdown 事实源重建了 {len(rebuilt_ids)} 条议题索引（保留文件版本号）！"
+            "message": f"从 Markdown 重建了 {len(rebuilt_ids)} 条议题索引（保留文件版本号）！"
         }
 
     def sync_metadata_json(self):
