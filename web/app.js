@@ -26,7 +26,7 @@
   };
 
   // Server/user strings must never be interpreted as HTML or executable JS.
-  function showToast(message, type = "success") {
+  function showToast(message, type = "success", action = null) {
     const container = document.getElementById("toast-container");
     if (!container) return;
     const safeType = ["success", "warning", "error"].includes(type) ? type : "error";
@@ -37,6 +37,22 @@
     const text = document.createElement("span");
     text.textContent = String(message ?? "");
     toast.append(icon, text);
+    if (action && action.text) {
+      const actionBtn = document.createElement("button");
+      actionBtn.className = "btn btn-secondary";
+      actionBtn.style.marginLeft = "0.75rem";
+      actionBtn.style.padding = "0.15rem 0.5rem";
+      actionBtn.style.fontSize = "0.75rem";
+      actionBtn.style.borderRadius = "var(--radius-sm)";
+      actionBtn.textContent = action.text;
+      if (typeof action.onClick === "function") {
+        actionBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          action.onClick();
+        });
+      }
+      toast.appendChild(actionBtn);
+    }
     container.appendChild(toast);
     setTimeout(() => {
       toast.style.opacity = "0";
@@ -821,10 +837,16 @@
           state.editSession = null;
           document.getElementById("modal-edit-decision").classList.remove("active");
         }
+        const undoAction = {
+          text: "撤销这次提交",
+          onClick: () => {
+            openTimeMachine();
+          },
+        };
         if (result.git_status === "committed") {
-          showToast(`决策已保存，Git Commit [${result.commit_hash || ""}] 已提交。`);
+          showToast(`决策已保存，Git Commit [${result.commit_hash || ""}] 已提交。`, "success", undoAction);
         } else {
-          showToast(`决策已保存；Git 状态：${result.git_message || result.git_status || "未确认"}`, "warning");
+          showToast(`决策已保存；Git 状态：${result.git_message || result.git_status || "未确认"}`, "warning", undoAction);
         }
         const refreshed = await loadMetadataList();
         if (!refreshed) showToast("保存已经成功，但列表刷新失败；请勿重复提交同一讨论。", "warning");
@@ -905,7 +927,10 @@
     container.innerHTML = `<div style="color: var(--text-dim); text-align: center; padding: 2rem;">加载历史快照中...</div>`;
 
     try {
-      const res = await fetch("/api/git/log");
+      const url = state.selectedTopicId
+        ? `/api/git/log?topic_id=${encodeURIComponent(state.selectedTopicId)}&limit=100`
+        : `/api/git/log?limit=100`;
+      const res = await fetch(url);
       if (!res.ok) throw new Error(`历史接口返回 HTTP ${res.status}`);
       if (res.ok) {
         const data = await res.json();
@@ -924,13 +949,15 @@
 
         let revsHtml = "";
         (data.revisions || []).forEach((r) => {
-          const isSingleTopicAction = r.topic_id;
+          const hasTopicInSnapshot = Array.isArray(r.snapshot_topic_ids)
+            ? r.snapshot_topic_ids.includes(state.selectedTopicId)
+            : (!r.topic_id || r.topic_id === state.selectedTopicId);
           revsHtml += `
             <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.6rem 0.8rem; margin-bottom: 0.6rem;">
               <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.75rem; margin-bottom: 0.3rem;">
                 <span class="chip" style="font-family: var(--font-mono);">${escapeHtml(r.rev_hash)}</span>
                 <div style="display: flex; gap: 0.3rem;">
-                  ${state.selectedTopicId ? `
+                  ${(state.selectedTopicId && hasTopicInSnapshot) ? `
                     <button class="btn btn-secondary" style="font-size: 0.7rem; padding: 0.15rem 0.4rem; color: var(--color-primary);" data-history-action="restore" data-topic-id="${escapeHtml(state.selectedTopicId)}" data-revision-id="${escapeHtml(r.rev_id)}">
                       ⏪ 仅回滚当前议题
                     </button>
@@ -962,12 +989,27 @@
   // P1-C: 单议题针对性回滚
   async function restoreSingleTopic(topicId, revId) {
     if (!Number.isSafeInteger(Number(revId)) || Number(revId) < 1) return;
-    if (!confirm(`将议题 [${topicId}] 恢复至快照 #${revId}？请先备份数据；此前端补丁不修复后端恢复逻辑。`)) return;
+    if (state.isRestoring) {
+      showToast("已有恢复任务正在处理中，请勿重复操作", "warning");
+      return;
+    }
+    if (!confirm(`将议题 [${topicId}] 恢复至快照 #${revId}？`)) return;
+
+    state.isRestoring = true;
     try {
+      const currentTopic = (state.topics || []).find((t) => t.id === topicId) || state.topicsDetailCache[topicId];
+      const expectedVersion = currentTopic ? currentTopic.version : undefined;
+      const requestId = "restore-" + (window.crypto?.randomUUID?.() || (Date.now() + "-" + Math.random().toString(36).slice(2)));
+
       const res = await fetch(`${topicPath(topicId)}/restore`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rev_id: revId, reason: "用户在看板中执行单议题精准回溯" }),
+        body: JSON.stringify({
+          rev_id: revId,
+          reason: "用户在看板中执行单议题精准回溯",
+          expected_version: expectedVersion,
+          request_id: requestId,
+        }),
       });
       const data = await res.json();
       if (res.ok) {
@@ -976,10 +1018,15 @@
         await loadMetadataList();
         showToast(`⏪ 议题 [${topicId}] 已成功精准回滚至快照 ${data.restored_from}！`);
       } else {
-        alert(`单议题回滚失败: ${data.message || data.error}`);
+        closeDrawer("drawer-time-machine");
+        delete state.topicsDetailCache[topicId];
+        await loadMetadataList();
+        showToast(`单议题回滚失败: ${data.message || data.error}`, "error");
       }
     } catch (e) {
-      alert(`请求异常: ${e.message}`);
+      showToast(`请求异常: ${e.message}`, "error");
+    } finally {
+      state.isRestoring = false;
     }
   }
 
