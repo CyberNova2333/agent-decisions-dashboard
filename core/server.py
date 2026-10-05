@@ -2,6 +2,7 @@
 """
 Agent Decisions Dashboard - HTTP Server & REST API
 基于 Python 标准库的高性能决策看板服务端
+具备安全防护、乐观锁并发检查、幂等去重与 Agent 上下文导出接口
 """
 
 import sys
@@ -23,40 +24,50 @@ if sys.platform == "win32":
         pass
 
 from core.config import Config, load_config
-from core.db import DatabaseManager
+from core.db import DatabaseManager, VersionConflictError
 from core.markdown_parser import TopicMarkdownParser
 from core.git_engine import GitEngine
+from core.decision_service import DecisionService, TopicValidationError, IdempotencyConflictError
+from core.recovery import RecoveryManager
+from core.agent_context import AgentContextEngine
+
+MAX_BODY_SIZE = 10 * 1024 * 1024  # 10MB 最大请求体限制防 DoS
 
 class DashboardServer:
     def __init__(self, config: Config, web_dir: Optional[Path] = None):
         self.config = config
         self.repo_root = config.base_dir
         self.web_dir = web_dir or (Path(__file__).resolve().parent.parent / "web")
-        self.db = DatabaseManager(config.database_path, config)
-        self.git = GitEngine(self.repo_root, config)
-        self.parser = TopicMarkdownParser()
+        self.service = DecisionService(config)
+        self.recovery = RecoveryManager(config, self.service.db)
+        self.agent = AgentContextEngine(config, self.service.db)
+        self.db = self.service.db
+        self.git = self.service.git
+        self.parser = self.service.parser
 
-    def get_lifecycle_badge(self, lifecycle_id: str) -> str:
-        for state in self.config.lifecycle_states:
-            if state["id"] == lifecycle_id:
-                return state["badge"]
-        return "🟡 待讨论"
+        # 启动时自检并初始化：若库为空且有 metadata.json，则自动导入
+        self._ensure_initial_data()
+
+    def _ensure_initial_data(self):
+        """冷启动自愈：数据库为空时从 Markdown 或 metadata.json 导入初始议题"""
+        try:
+            db_topics = self.db.get_all_topics()
+            if not db_topics:
+                # 优先从 Markdown 重建
+                if self.config.decisions_dir.exists() and list(self.config.decisions_dir.glob("*.md")):
+                    self.recovery.rebuild_index_from_markdown()
+                elif self.config.metadata_json_path.exists():
+                    data = json.loads(self.config.metadata_json_path.read_text(encoding="utf-8"))
+                    for t in data.get("topics", []):
+                        self.db.upsert_topic(t)
+        except Exception as e:
+            print(f"[WARN] 初始数据自检异常: {e}")
 
     def load_all_topics_meta(self) -> list:
         """从 SQLite 读取所有议题的元数据列表（毫秒级冷启动）"""
         topics_list = []
         try:
             db_topics = self.db.get_all_topics()
-            if not db_topics and self.config.metadata_json_path.exists():
-                try:
-                    data = json.loads(self.config.metadata_json_path.read_text(encoding="utf-8"))
-                    topics_list = data.get("topics", [])
-                    for t in topics_list:
-                        self.db.upsert_topic(t)
-                    return topics_list
-                except Exception:
-                    pass
-
             for r in db_topics:
                 topic_id = r["id"]
                 md_file = self.config.decisions_dir / f"{topic_id}.md"
@@ -80,6 +91,14 @@ class DashboardServer:
                     "object": r["object"],
                     "function": r["function"],
                     "lifecycle_status": r["lifecycle_status"],
+                    "workflow_state": r.get("workflow_state") or r["lifecycle_status"],
+                    "decision_outcome": r.get("decision_outcome") or "",
+                    "rejection_reason": r.get("rejection_reason") or "",
+                    "superseded_by": r.get("superseded_by") or "",
+                    "implementation_state": r.get("implementation_state") or "not_started",
+                    "impl_commit": r.get("impl_commit") or "",
+                    "impl_verifier": r.get("impl_verifier") or "",
+                    "version": r.get("version", 1),
                     "decision_status": r["decision_status"],
                     "impl_status": r["impl_status"],
                     "priority": r.get("priority", "普通"),
@@ -92,145 +111,7 @@ class DashboardServer:
                 })
         except Exception as e:
             print(f"[WARN] 读取元数据失败: {e}")
-            if self.config.metadata_json_path.exists():
-                try:
-                    data = json.loads(self.config.metadata_json_path.read_text(encoding="utf-8"))
-                    topics_list = data.get("topics", [])
-                except Exception:
-                    pass
         return topics_list
-
-    def save_topic_and_commit(self, topic_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        保存议题决策：
-        1. 在 decisions/<id>.md 中追加第 n 轮讨论记录并更新标头
-        2. 更新 SQLite 数据库与 metadata.json
-        3. 自动递交 Git 语义化提交
-        4. 记录全量 Revision 数据库快照
-        """
-        title = data.get("title", "")
-        lc = data.get("lifecycle_status", "decided")
-        dec_status = data.get("decision_status", "已定")
-        impl_status = data.get("impl_status", "未实现")
-        priority = data.get("priority", "普通")
-        user_opinion = data.get("new_user_opinion", "").strip()
-        agent_reply = data.get("new_agent_reply", "").strip()
-        commit_msg = data.get("commit_message", "").strip()
-        content_override = data.get("content_override")
-        obj = data.get("object", "通用系统")
-        func = data.get("function", "核心规范")
-        sources = data.get("sources", "")
-
-        md_file = self.config.decisions_dir / f"{topic_id}.md"
-        existing = self.parser.parse_markdown_file(md_file)
-
-        now_dt = datetime.datetime.now()
-        now_iso = now_dt.isoformat()
-
-        current_rounds = existing["rounds"] if existing else []
-        new_round_num = len(current_rounds) + 1
-
-        core_content = content_override if content_override is not None else (existing["core_content"] if existing else "")
-        lifecycle_badge = self.get_lifecycle_badge(lc)
-
-        new_round_info = None
-        if user_opinion or agent_reply or commit_msg:
-            new_round_info = {
-                "commit_message": commit_msg,
-                "user_opinion": user_opinion,
-                "agent_reply": agent_reply
-            }
-
-        # 1. 写回单议题 Markdown
-        md_text = self.parser.serialize_markdown(
-            topic_id=topic_id,
-            title=title,
-            lifecycle_badge=lifecycle_badge,
-            decision_status=dec_status,
-            impl_status=impl_status,
-            priority=priority,
-            obj=obj,
-            func=func,
-            core_content=core_content,
-            existing_rounds=current_rounds,
-            new_round=new_round_info
-        )
-        self.config.decisions_dir.mkdir(parents=True, exist_ok=True)
-        md_file.write_text(md_text, encoding="utf-8")
-
-        # 2. 更新 SQLite 数据库
-        topic_row = self.db.get_topic(topic_id)
-        discussion = json.loads(topic_row["discussion_json"]) if (topic_row and topic_row.get("discussion_json")) else []
-        if user_opinion:
-            discussion.append({"key": f"第 {new_round_num} 轮用户意见", "val": user_opinion})
-        if agent_reply:
-            discussion.append({"key": f"第 {new_round_num} 轮落实答复", "val": agent_reply})
-
-        self.db.upsert_topic({
-            "id": topic_id,
-            "title": title,
-            "section": data.get("section", "未分类"),
-            "object": obj,
-            "function": func,
-            "lifecycle_status": lc,
-            "decision_status": dec_status,
-            "impl_status": impl_status,
-            "priority": priority,
-            "content": core_content,
-            "sources": sources,
-            "discussion": discussion,
-            "updated_at": now_iso
-        })
-
-        if commit_msg:
-            self.db.record_changelog(
-                scope=f"[{title}](#{topic_id})",
-                change=f"{commit_msg} [{lifecycle_badge}]",
-                basis=f"用户原话: {user_opinion[:30]}..." if user_opinion else "用户明确决策"
-            )
-
-        # 3. 同步 metadata.json 与 doc_data.json
-        all_meta = self.load_all_topics_meta()
-        self.config.metadata_json_path.parent.mkdir(parents=True, exist_ok=True)
-        self.config.metadata_json_path.write_text(json.dumps({
-            "updated_at": now_iso,
-            "total_topics": len(all_meta),
-            "topics": all_meta
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
-
-        # 4. 执行 Git 自动语义化提交
-        staged = [md_file, self.config.metadata_json_path, self.config.database_path]
-        commit_success, commit_result = self.git.commit_decision(
-            topic_title=title,
-            lifecycle_badge=lifecycle_badge,
-            summary=commit_msg,
-            user_opinion=user_opinion,
-            agent_reply=agent_reply,
-            staged_files=staged
-        )
-
-        commit_hash = commit_result if commit_success else "local"
-
-        # 5. 记录 Revision 快照
-        self.db.commit_revision(
-            action_type="RECORD_DECISION",
-            summary=f"[{lifecycle_badge}] {title} - {commit_msg}",
-            topic_id=topic_id,
-            author="用户",
-            user_opinion=user_opinion,
-            agent_reply=agent_reply,
-            new_lifecycle=lc,
-            diff_summary=f"Git Commit: {commit_hash}"
-        )
-
-        return {
-            "status": "success",
-            "commit_hash": commit_hash,
-            "round": new_round_num,
-            "topic_id": topic_id,
-            "updated_at": now_iso,
-            "message": f"决策已入库并生成 Git 提交 ({commit_hash})！"
-        }
 
 
 def make_handler(server: DashboardServer):
@@ -241,16 +122,29 @@ def make_handler(server: DashboardServer):
         def end_headers(self):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Request-ID, X-Expected-Version")
             super().end_headers()
 
         def do_OPTIONS(self):
             self.send_response(200)
             self.end_headers()
 
+        def _send_json(self, status_code: int, data: Any):
+            self.send_response(status_code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
+
+        def _send_text(self, status_code: int, text: str, content_type: str = "text/plain; charset=utf-8"):
+            self.send_response(status_code)
+            self.send_header("Content-Type", content_type)
+            self.end_headers()
+            self.wfile.write(text.encode("utf-8"))
+
         def do_GET(self):
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
+            query_params = urllib.parse.parse_qs(parsed.query)
 
             if path == "/":
                 self.send_response(302)
@@ -259,26 +153,22 @@ def make_handler(server: DashboardServer):
                 return
 
             elif path == "/api/config":
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.end_headers()
-                self.wfile.write(json.dumps(server.config.to_dict(), ensure_ascii=False).encode("utf-8"))
+                self._send_json(200, server.config.to_dict())
                 return
 
             elif path == "/api/status":
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.end_headers()
                 head_hash = server.git.get_head_hash(short=True)
+                consistency = server.recovery.check_consistency()
                 res = {
                     "status": "ok",
                     "project_name": server.config.project_name,
                     "database": str(server.config.database_path.name),
                     "git_commit": head_hash,
                     "topics_dir": str(server.config.decisions_dir),
+                    "consistency": consistency,
                     "server_time": datetime.datetime.now().isoformat()
                 }
-                self.wfile.write(json.dumps(res, ensure_ascii=False).encode("utf-8"))
+                self._send_json(200, res)
                 return
 
             elif path == "/api/topics":
@@ -291,36 +181,62 @@ def make_handler(server: DashboardServer):
                     "changelog": full_data.get("changelog", []),
                     "config": server.config.to_dict()
                 }
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.end_headers()
-                self.wfile.write(json.dumps(res, ensure_ascii=False).encode("utf-8"))
+                self._send_json(200, res)
                 return
 
             elif path.startswith("/api/topic/"):
-                topic_id = path.replace("/api/topic/", "").strip()
+                raw_id = path.replace("/api/topic/", "").strip()
+                try:
+                    topic_id = server.service.validate_topic_id(raw_id)
+                except TopicValidationError as e:
+                    self._send_json(400, {"error": "invalid_topic_id", "message": str(e)})
+                    return
+
                 md_file = server.config.decisions_dir / f"{topic_id}.md"
                 detail = server.parser.parse_markdown_file(md_file)
+                if not detail:
+                    # 尝试从 DB 补充
+                    row = server.db.get_topic(topic_id)
+                    if row:
+                        detail = {
+                            "id": row["id"],
+                            "title": row["title"],
+                            "version": row.get("version", 1),
+                            "workflow_state": row.get("workflow_state", "discussing"),
+                            "core_content": row.get("content", ""),
+                            "rounds": []
+                        }
+
                 if detail:
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/json; charset=utf-8")
-                    self.end_headers()
-                    self.wfile.write(json.dumps(detail, ensure_ascii=False).encode("utf-8"))
+                    self._send_json(200, detail)
                 else:
-                    self.send_response(404)
-                    self.end_headers()
+                    self._send_json(404, {"error": "not_found", "message": f"未找到议题 [{topic_id}]"})
                 return
 
             elif path == "/api/git/log":
                 commits = server.git.get_commit_history(limit=30)
                 revisions = server.db.get_revisions(limit=30)
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.end_headers()
-                self.wfile.write(json.dumps({
-                    "commits": commits,
-                    "revisions": revisions
-                }, ensure_ascii=False).encode("utf-8"))
+                self._send_json(200, {"commits": commits, "revisions": revisions})
+                return
+
+            elif path == "/api/agent/context":
+                # 面向 Agent 的上下文只读导出
+                mod = query_params.get("module", [None])[0]
+                kw = query_params.get("path", [None])[0]
+                tid = query_params.get("topic_id", [None])[0]
+                fmt = query_params.get("format", ["json"])[0]
+
+                ctx = server.agent.query_context(module=mod, path_keyword=kw, topic_id=tid)
+                if fmt.lower() == "markdown":
+                    md_text = server.agent.format_as_markdown(ctx)
+                    self._send_text(200, md_text, content_type="text/markdown; charset=utf-8")
+                else:
+                    self._send_json(200, ctx)
+                return
+
+            elif path == "/api/recovery/check":
+                report = server.recovery.check_consistency()
+                self._send_json(200, report)
                 return
 
             return super().do_GET()
@@ -329,69 +245,179 @@ def make_handler(server: DashboardServer):
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
             length = int(self.headers.get("Content-Length", 0))
+
+            if length > MAX_BODY_SIZE:
+                self._send_json(413, {"error": "payload_too_large", "message": f"请求体超限 (最大允许 {MAX_BODY_SIZE} 字节)"})
+                return
+
             raw_body = self.rfile.read(length).decode("utf-8") if length > 0 else "{}"
-            data = json.loads(raw_body) if raw_body else {}
+            try:
+                data = json.loads(raw_body) if raw_body else {}
+            except Exception as e:
+                self._send_json(400, {"error": "bad_json", "message": f"无效的 JSON 数据: {e}"})
+                return
 
+            request_id = self.headers.get("X-Request-ID") or data.get("request_id")
+            expected_ver = self.headers.get("X-Expected-Version") or data.get("expected_version")
+            if expected_ver is not None:
+                try:
+                    expected_ver = int(expected_ver)
+                except ValueError:
+                    expected_ver = None
+
+            # 1. 保存议题
             if path.startswith("/api/topic/") and path.endswith("/save"):
-                topic_id = path.replace("/api/topic/", "").replace("/save", "").strip()
-                res = server.save_topic_and_commit(topic_id, data)
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.end_headers()
-                self.wfile.write(json.dumps(res, ensure_ascii=False).encode("utf-8"))
+                raw_id = path.replace("/api/topic/", "").replace("/save", "").strip()
+                try:
+                    res = server.service.save_topic(
+                        topic_id=raw_id,
+                        data=data,
+                        expected_version=expected_ver,
+                        request_id=request_id
+                    )
+                    self._send_json(200, res)
+                except VersionConflictError as e:
+                    current_data = server.db.get_topic(e.topic_id)
+                    self._send_json(409, {
+                        "error": "version_conflict",
+                        "message": str(e),
+                        "current_version": e.current_version,
+                        "expected_version": e.expected_version,
+                        "current_topic": current_data
+                    })
+                except IdempotencyConflictError as e:
+                    self._send_json(409, {"error": "idempotency_conflict", "message": str(e)})
+                except TopicValidationError as e:
+                    self._send_json(400, {"error": "validation_error", "message": str(e)})
+                except Exception as e:
+                    self._send_json(500, {"error": "server_error", "message": str(e)})
                 return
 
+            # 2. 新建议题
             elif path == "/api/topic/create":
-                topic_id = data.get("id", "").strip()
-                if not topic_id:
-                    self.send_response(400)
-                    self.end_headers()
-                    self.wfile.write(json.dumps({"error": "缺少 topic ID"}, ensure_ascii=False).encode("utf-8"))
-                    return
-
-                res = server.save_topic_and_commit(topic_id, data)
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.end_headers()
-                self.wfile.write(json.dumps(res, ensure_ascii=False).encode("utf-8"))
+                try:
+                    res = server.service.create_topic(data, request_id=request_id)
+                    self._send_json(200, res)
+                except TopicValidationError as e:
+                    self._send_json(400, {"error": "validation_error", "message": str(e)})
+                except Exception as e:
+                    self._send_json(500, {"error": "server_error", "message": str(e)})
                 return
 
+            # 3. 单议题针对性回滚 (P1-C)
+            elif path.startswith("/api/topic/") and path.endswith("/restore"):
+                raw_id = path.replace("/api/topic/", "").replace("/restore", "").strip()
+                rev_id = data.get("rev_id")
+                if not rev_id:
+                    self._send_json(400, {"error": "missing_rev_id", "message": "缺少 rev_id 参数"})
+                    return
+                try:
+                    res = server.service.restore_single_topic(
+                        topic_id=raw_id,
+                        rev_id=int(rev_id),
+                        author=data.get("author", "用户/前端"),
+                        reason=data.get("reason", "")
+                    )
+                    self._send_json(200, res)
+                except Exception as e:
+                    self._send_json(500, {"error": "restore_failed", "message": str(e)})
+                return
+
+            # 4. 关联实现证据与核验 (P2-E)
+            elif path.startswith("/api/topic/") and path.endswith("/verify"):
+                raw_id = path.replace("/api/topic/", "").replace("/verify", "").strip()
+                commit_hash = data.get("impl_commit", "").strip()
+                verifier = data.get("verifier", "Agent/CI").strip()
+                test_summary = data.get("test_summary", "").strip()
+                mark_verified = bool(data.get("mark_verified", True))
+                if not commit_hash:
+                    self._send_json(400, {"error": "missing_commit", "message": "必须提供实现代码的 Git 提交 Hash"})
+                    return
+                try:
+                    res = server.agent.record_verification(
+                        topic_id=raw_id,
+                        impl_commit=commit_hash,
+                        verifier=verifier,
+                        test_summary=test_summary,
+                        mark_verified=mark_verified
+                    )
+                    self._send_json(200, res)
+                except Exception as e:
+                    self._send_json(500, {"error": "verify_failed", "message": str(e)})
+                return
+
+            # 5. 全库快照回滚
             elif path == "/api/rollback":
                 rev_id = data.get("rev_id")
+                if not rev_id:
+                    self._send_json(400, {"error": "missing_rev_id", "message": "缺少 rev_id"})
+                    return
                 try:
-                    res = server.db.rollback_revision(rev_id)
-                    server.git.stage_files([server.config.database_path])
-                    server.git.commit_decision(
-                        topic_title="全量数据库快照",
-                        lifecycle_badge="时间旅行",
-                        summary=f"回滚全量快照 #{rev_id}"
+                    res = server.service.rollback_full(
+                        rev_id=int(rev_id),
+                        author=data.get("author", "用户/看板")
                     )
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/json; charset=utf-8")
-                    self.end_headers()
-                    self.wfile.write(json.dumps(res, ensure_ascii=False).encode("utf-8"))
+                    self._send_json(200, res)
                 except Exception as e:
-                    self.send_response(500)
-                    self.send_header("Content-Type", "application/json; charset=utf-8")
-                    self.end_headers()
-                    self.wfile.write(json.dumps({"error": str(e)}, ensure_ascii=False).encode("utf-8"))
+                    self._send_json(500, {"error": "rollback_failed", "message": str(e)})
                 return
 
-            self.send_response(404)
-            self.end_headers()
+            # 6. 从 Markdown 重新全量重建索引 (P1-A Recovery)
+            elif path == "/api/recovery/rebuild":
+                try:
+                    res = server.recovery.rebuild_index_from_markdown()
+                    self._send_json(200, res)
+                except Exception as e:
+                    self._send_json(500, {"error": "rebuild_failed", "message": str(e)})
+                return
+
+            # 7. SQLite 在线热备份 (Section 5)
+            elif path == "/api/backup":
+                backup_filename = f"decisions_backup_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
+                target_p = server.config.base_dir / "backups" / backup_filename
+                try:
+                    res = server.db.backup_database(target_p)
+                    self._send_json(200, res)
+                except Exception as e:
+                    self._send_json(500, {"error": "backup_failed", "message": str(e)})
+                return
+
+            self._send_json(404, {"error": "not_found", "message": f"未找到接口: {path}"})
 
     return RequestHandler
 
 def main():
     parser = argparse.ArgumentParser(description="Agent Decisions Dashboard Server")
     parser.add_argument("--config", type=str, help="配置文件路径")
-    parser.add_argument("--host", type=str, help="绑定主机地址")
-    parser.add_argument("--port", type=int, help="绑定服务端口")
+    parser.add_argument("--host", type=str, help="绑定主机地址 (默认 127.0.0.1)")
+    parser.add_argument("--port", type=int, help="绑定服务端口 (默认 8765)")
     parser.add_argument("--no-browser", action="store_true", help="启动时不自动打开浏览器")
+    parser.add_argument("--check-consistency", action="store_true", help="检查 Markdown、SQLite 与 metadata.json 一致性后退出")
+    parser.add_argument("--rebuild-index", action="store_true", help="以 Markdown 文件为事实源全量重建索引后退出")
+    parser.add_argument("--export-agent-context", type=str, help="按模块导出 Agent 治理 Prompt Markdown 后退出")
     args = parser.parse_args()
 
     cfg_path = Path(args.config) if args.config else None
     config = load_config(cfg_path)
+
+    # CLI 独立操作模式
+    if args.check_consistency:
+        rec = RecoveryManager(config)
+        report = rec.check_consistency()
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        sys.exit(0 if report["consistent"] else 1)
+
+    if args.rebuild_index:
+        rec = RecoveryManager(config)
+        res = rec.rebuild_index_from_markdown()
+        print(f"重建完成: {res['message']}")
+        sys.exit(0)
+
+    if args.export_agent_context:
+        agent_eng = AgentContextEngine(config)
+        ctx = agent_eng.query_context(module=args.export_agent_context)
+        print(agent_eng.format_as_markdown(ctx))
+        sys.exit(0)
 
     host = args.host or config.host
     port = args.port or config.port
@@ -401,12 +427,13 @@ def main():
 
     httpd = HTTPServer((host, port), handler_class)
     url = f"http://{host}:{port}/dashboard.html"
-    print("=" * 60)
-    print(f"  {config.project_name} - 启动成功")
+    print("=" * 64)
+    print(f"  {config.project_name} - 服务已启动")
     print(f"  服务地址: {url}")
     print(f"  数据目录: {config.decisions_dir}")
     print(f"  数据库:   {config.database_path}")
-    print("=" * 60)
+    print(f"  安全策略: 绑定主机={host} | 最大请求体=10MB | 暂存区保护=已启用")
+    print("=" * 64)
 
     if not args.no_browser:
         webbrowser.open(url)
@@ -414,7 +441,7 @@ def main():
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
-        print("\n服务已退出")
+        print("\n服务已正常退出")
 
 if __name__ == "__main__":
     main()
