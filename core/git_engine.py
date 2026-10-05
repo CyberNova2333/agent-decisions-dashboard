@@ -127,9 +127,11 @@ class GitEngine:
         """添加指定文件至暂存区"""
         rel_paths = [self.normalize_rel_path(p) for p in paths]
         if not rel_paths:
+            self.last_stage_error = ""
             return True
 
-        success, _, _ = self.run_git(["add", "--"] + rel_paths)
+        success, stdout, stderr = self.run_git(["add", "--"] + rel_paths)
+        self.last_stage_error = (stderr or stdout or "").strip()
         return success
 
     def commit_decision(
@@ -223,10 +225,11 @@ class GitEngine:
         if staged_files:
             ok = self.stage_files(staged_files)
             if not ok:
+                err_msg = f"执行 git add 暂存文件失败: {self.last_stage_error}" if self.last_stage_error else "执行 git add 暂存文件失败"
                 return GitCommitResult(
                     success=False,
                     status="git_error",
-                    message="执行 git add 暂存文件失败"
+                    message=err_msg
                 )
 
         # 5. 提交前二次安全校验：防止暂存区预检后发生外部并发 git add 竞态 (R10)
