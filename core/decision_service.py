@@ -10,6 +10,7 @@ import json
 import uuid
 import hashlib
 import re
+import time
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
@@ -35,6 +36,18 @@ class DecisionService:
         self.git = GitEngine(self.repo_root, config)
         self.parser = TopicMarkdownParser()
         self.recovery = RecoveryManager(config, self.db)
+
+    @staticmethod
+    def _atomic_replace(src: Path, dst: Path, max_retries: int = 15, delay: float = 0.02):
+        """原子替换文件，在 Windows 等存在短暂文件锁的平台上提供微重试保护"""
+        for i in range(max_retries):
+            try:
+                os.replace(src, dst)
+                return
+            except PermissionError:
+                if i == max_retries - 1:
+                    raise
+                time.sleep(delay)
 
     def validate_topic_id(self, topic_id: str) -> str:
         """安全校验 topic_id，彻底防止目录遍历与非法字符"""
@@ -81,16 +94,21 @@ class DecisionService:
 
         # 1. 幂等性检查 (指纹绑定 topic_id 与规范化 data)
         req_hash = hashlib.sha256(f"{topic_id}:{json.dumps(data, sort_keys=True, ensure_ascii=False)}".encode("utf-8")).hexdigest()
+        cached_prep = None
         if request_id:
             is_valid, cached_res = self.db.check_idempotency(request_id, topic_id, req_hash)
             if not is_valid:
                 raise IdempotencyConflictError(f"请求 ID [{request_id}] 冲突：相同 ID 携带了不同的请求数据或目标议题")
-            if cached_res is not None and cached_res.get("status") in ("success", "completed"):
-                return self._resume_pending_phases(cached_res, topic_id, data, request_id, req_hash)
+            if cached_res is not None:
+                if cached_res.get("status") in ("success", "completed") or cached_res.get("save_status") == "ok":
+                    return self._resume_pending_phases(cached_res, topic_id, data, request_id, req_hash)
+                elif cached_res.get("status") in ("prepared", "applied"):
+                    cached_prep = cached_res
 
         user_opinion = (data.get("new_user_opinion") or data.get("user_opinion") or "").strip()
         agent_reply = (data.get("new_agent_reply") or data.get("agent_reply") or "").strip()
         commit_msg = (data.get("commit_message") or "").strip()
+        content_override = data.get("content_override")
 
         # 2. 版本检查与分配：在产生任何持久副作用前先校验版本 (R02, F02, F03, F15)
         existing_row = self.db.get_topic(topic_id)
@@ -98,6 +116,50 @@ class DecisionService:
         md_file = self.config.decisions_dir / f"{topic_id}.md"
         existing_disk_text: Optional[str] = None
         is_interrupted_prior_attempt = False
+        db_already_updated = False
+
+        if cached_prep is not None:
+            prep_allocated_ver = cached_prep.get("allocated_version")
+            if existing_row and prep_allocated_ver is not None and existing_row.get("version") == prep_allocated_ver:
+                db_already_updated = True
+                is_interrupted_prior_attempt = True
+                allocated_version = prep_allocated_ver
+            else:
+                is_interrupted_prior_attempt = True
+                allocated_version = prep_allocated_ver if prep_allocated_ver is not None else (current_db_ver + 1 if existing_row else 1)
+                if existing_row:
+                    current_ver = existing_row.get("version", 1)
+                    if expected_version is not None and expected_version != current_ver:
+                        raise VersionConflictError(
+                            current_version=current_ver,
+                            expected_version=expected_version,
+                            topic_id=topic_id
+                        )
+                else:
+                    if expected_version is not None and expected_version != 1:
+                        raise VersionConflictError(
+                            current_version=0,
+                            expected_version=expected_version,
+                            topic_id=topic_id
+                        )
+        else:
+            if existing_row:
+                current_ver = existing_row.get("version", 1)
+                if expected_version is not None and expected_version != current_ver:
+                    raise VersionConflictError(
+                        current_version=current_ver,
+                        expected_version=expected_version,
+                        topic_id=topic_id
+                    )
+                allocated_version = current_ver + 1
+            else:
+                if expected_version is not None and expected_version != 1:
+                    raise VersionConflictError(
+                        current_version=0,
+                        expected_version=expected_version,
+                        topic_id=topic_id
+                    )
+                allocated_version = 1
 
         if md_file.exists():
             try:
@@ -105,69 +167,45 @@ class DecisionService:
                 parsed_disk = self.parser.parse_markdown_file(md_file)
                 if parsed_disk:
                     disk_ver = parsed_disk.get("version", 1)
-                    disk_rounds = parsed_disk.get("rounds", [])
-                    
-                    # 检查磁盘是否已在上次中断的写入中先一步落盘了本请求的轮次 (F03)
-                    last_matches = False
-                    if disk_rounds and (user_opinion or agent_reply or commit_msg):
-                        last_r = disk_rounds[-1]
-                        last_u = (last_r.get("user_opinion") or "").strip()
-                        last_a = (last_r.get("agent_reply") or "").strip()
-                        last_c = (last_r.get("commit_message") or "").strip()
-                        if (not user_opinion or user_opinion == last_u) and \
-                           (not agent_reply or agent_reply == last_a) and \
-                           (not commit_msg or commit_msg == last_c):
-                            last_matches = True
-
-                    if expected_version is not None and disk_ver == expected_version + 1 and current_db_ver == expected_version and last_matches:
-                        is_interrupted_prior_attempt = True
-                    elif expected_version is not None and disk_ver != expected_version:
-                        raise VersionConflictError(
-                            current_version=disk_ver,
-                            expected_version=expected_version,
-                            topic_id=topic_id
-                        )
-                    elif existing_row and not is_interrupted_prior_attempt:
-                        # 全量检测未入库的权威正文或元数据漂移 (F15, F09)
-                        db_wf = existing_row.get("workflow_state") or existing_row.get("lifecycle_status", "decided")
-                        disk_wf = parsed_disk.get("workflow_state") or parsed_disk.get("lifecycle_status", "decided")
-                        fields_to_check = [
-                            (parsed_disk.get("title"), existing_row.get("title")),
-                            (parsed_disk.get("core_content", "").strip(), existing_row.get("content", "").strip()),
-                            (parsed_disk.get("decision_outcome", "accepted"), existing_row.get("decision_outcome", "accepted")),
-                            (parsed_disk.get("rejection_reason", "").strip(), existing_row.get("rejection_reason", "").strip()),
-                            (disk_wf, db_wf),
-                            (parsed_disk.get("section", "未分类"), existing_row.get("section", "未分类")),
-                            (parsed_disk.get("implementation_state", "not_started"), existing_row.get("implementation_state", "not_started")),
-                        ]
-                        if any(d_val != b_val for d_val, b_val in fields_to_check):
+                    if is_interrupted_prior_attempt:
+                        # 属于同一请求的中断续做：如果磁盘版本等于预分配版本或预期版本，均视为合法
+                        if disk_ver not in (allocated_version, expected_version):
                             raise VersionConflictError(
                                 current_version=disk_ver,
                                 expected_version=expected_version,
                                 topic_id=topic_id
                             )
+                    else:
+                        # 全新请求或不同请求：磁盘版本必须严格与预期版本一致
+                        if expected_version is not None and disk_ver != expected_version:
+                            raise VersionConflictError(
+                                current_version=disk_ver,
+                                expected_version=expected_version,
+                                topic_id=topic_id
+                            )
+                        elif existing_row:
+                            # 全量检测未入库的权威正文或元数据漂移 (F15, F09)
+                            db_wf = existing_row.get("workflow_state") or existing_row.get("lifecycle_status", "decided")
+                            disk_wf = parsed_disk.get("workflow_state") or parsed_disk.get("lifecycle_status", "decided")
+                            fields_to_check = [
+                                (parsed_disk.get("title"), existing_row.get("title")),
+                                (parsed_disk.get("core_content", "").strip(), existing_row.get("content", "").strip()),
+                                (parsed_disk.get("decision_outcome", "accepted"), existing_row.get("decision_outcome", "accepted")),
+                                (parsed_disk.get("rejection_reason", "").strip(), existing_row.get("rejection_reason", "").strip()),
+                                (disk_wf, db_wf),
+                                (parsed_disk.get("section", "未分类"), existing_row.get("section", "未分类")),
+                                (parsed_disk.get("implementation_state", "not_started"), existing_row.get("implementation_state", "not_started")),
+                            ]
+                            if any(d_val != b_val for d_val, b_val in fields_to_check):
+                                raise VersionConflictError(
+                                    current_version=disk_ver,
+                                    expected_version=expected_version,
+                                    topic_id=topic_id
+                                )
             except VersionConflictError:
                 raise
             except Exception:
                 pass
-
-        if existing_row:
-            current_ver = existing_row.get("version", 1)
-            if expected_version is not None and expected_version != current_ver:
-                raise VersionConflictError(
-                    current_version=current_ver,
-                    expected_version=expected_version,
-                    topic_id=topic_id
-                )
-            allocated_version = current_ver + 1
-        else:
-            if expected_version is not None and expected_version != 1:
-                raise VersionConflictError(
-                    current_version=0,
-                    expected_version=expected_version,
-                    topic_id=topic_id
-                )
-            allocated_version = 1
 
         # 3. 准备议题字段与业务合法性校验
         title = (data.get("title") or topic_id).strip()
@@ -215,21 +253,31 @@ class DecisionService:
             priority = data.get("priority", "普通")
 
         dec_status = data.get("decision_status", "已定" if wf_state == "decided" else "待定")
-        user_opinion = (data.get("new_user_opinion") or data.get("user_opinion") or "").strip()
-        agent_reply = (data.get("new_agent_reply") or data.get("agent_reply") or "").strip()
-        commit_msg = (data.get("commit_message") or "").strip()
-        content_override = data.get("content_override")
-
         lifecycle_badge = self.get_lifecycle_badge(wf_state)
 
-        # 4. 读取既有 Markdown 与历史轮次
-        md_file = self.config.decisions_dir / f"{topic_id}.md"
+        # 4. 在对权威文件产生修改前，持久记录操作准备状态与预分配版本 (F02)
+        target_expected_version = expected_version if expected_version is not None else (existing_row.get("version") if existing_row else None)
+        if request_id and not cached_prep:
+            prep_payload = {
+                "status": "prepared",
+                "operation_id": op_id,
+                "topic_id": topic_id,
+                "expected_version": target_expected_version,
+                "allocated_version": allocated_version,
+                "title": title,
+                "save_status": "pending",
+                "export_status": "pending",
+                "git_status": "pending"
+            }
+            self.db.record_idempotency(request_id, topic_id, req_hash, prep_payload, status="prepared")
+
+        # 5. 读取既有 Markdown 与历史轮次
         existing_doc = self.parser.parse_markdown_file(md_file)
         current_rounds = existing_doc["rounds"] if existing_doc else []
 
-        # 幂等重试防护：检查最后一轮是否已包含当前请求的讨论内容，杜绝因更早数据库异常重试时重复追加轮次 (F03)
+        # 幂等重试防护：只有确认属于同一请求的中断重试，且磁盘文件已包含上一轮讨论时，才去重该轮次 (F01, F02)
         is_duplicate_round = False
-        if current_rounds and (user_opinion or agent_reply or commit_msg):
+        if is_interrupted_prior_attempt and current_rounds and (user_opinion or agent_reply or commit_msg):
             last_r = current_rounds[-1]
             last_u = (last_r.get("user_opinion") or "").strip()
             last_a = (last_r.get("agent_reply") or "").strip()
@@ -250,7 +298,7 @@ class DecisionService:
                 "agent_reply": agent_reply
             }
 
-        # 5. 序列化 Markdown 并原子化写入磁盘 (临时文件 + os.replace)
+        # 序列化 Markdown 并原子化写入磁盘 (临时文件 + os.replace)
         md_text = self.parser.serialize_markdown(
             topic_id=topic_id,
             title=title,
@@ -277,7 +325,7 @@ class DecisionService:
         temp_file = md_file.with_suffix(f".tmp.{uuid.uuid4().hex[:8]}")
         try:
             temp_file.write_text(md_text, encoding="utf-8")
-            os.replace(temp_file, md_file)
+            self._atomic_replace(temp_file, md_file)
         finally:
             if temp_file.exists():
                 try:
@@ -287,9 +335,10 @@ class DecisionService:
 
         # 6. 更新 SQLite 数据库结构化索引
         discussion = json.loads(existing_row["discussion_json"]) if (existing_row and existing_row.get("discussion_json")) else []
-        has_commit = any(d.get("val") == commit_msg for d in discussion if "变更说明" in d.get("key", "")) if commit_msg else False
-        has_opinion = any(d.get("val") == user_opinion for d in discussion if "用户意见" in d.get("key", "")) if user_opinion else False
-        has_reply = any(d.get("val") == agent_reply for d in discussion if "答复" in d.get("key", "") or "落实" in d.get("key", "")) if agent_reply else False
+        
+        has_commit = any(d.get("key") == f"第 {new_round_num} 轮变更说明" for d in discussion)
+        has_opinion = any(d.get("key") == f"第 {new_round_num} 轮用户意见" for d in discussion)
+        has_reply = any(d.get("key") == f"第 {new_round_num} 轮落实答复" for d in discussion)
 
         if commit_msg and not has_commit:
             discussion.append({"key": f"第 {new_round_num} 轮变更说明", "val": commit_msg})
@@ -298,35 +347,45 @@ class DecisionService:
         if agent_reply and not has_reply:
             discussion.append({"key": f"第 {new_round_num} 轮落实答复", "val": agent_reply})
 
-        target_expected_version = expected_version if expected_version is not None else (existing_row.get("version") if existing_row else None)
-        try:
-            new_version = self.db.upsert_topic({
-                "id": topic_id,
-                "title": title,
-                "section": section,
-                "object": obj,
-                "function": func,
-                "lifecycle_status": wf_state,
-                "workflow_state": wf_state,
-                "decision_outcome": outcome,
-                "rejection_reason": rejection_reason,
-                "superseded_by": superseded_by,
-                "implementation_state": impl_state,
-                "impl_commit": impl_commit,
-                "impl_verifier": impl_verifier,
-                "decision_status": dec_status,
-                "impl_status": impl_state,
-                "priority": priority,
-                "content": core_content,
-                "discussion": discussion
-            }, expected_version=target_expected_version, exact_version=allocated_version)
-        except VersionConflictError:
-            if existing_disk_text is not None:
+        if not db_already_updated:
+            try:
+                new_version = self.db.upsert_topic({
+                    "id": topic_id,
+                    "title": title,
+                    "section": section,
+                    "object": obj,
+                    "function": func,
+                    "lifecycle_status": wf_state,
+                    "workflow_state": wf_state,
+                    "decision_outcome": outcome,
+                    "rejection_reason": rejection_reason,
+                    "superseded_by": superseded_by,
+                    "implementation_state": impl_state,
+                    "impl_commit": impl_commit,
+                    "impl_verifier": impl_verifier,
+                    "decision_status": dec_status,
+                    "impl_status": impl_state,
+                    "priority": priority,
+                    "content": core_content,
+                    "discussion": discussion
+                }, expected_version=target_expected_version, exact_version=allocated_version)
+            except VersionConflictError:
                 try:
-                    md_file.write_text(existing_disk_text, encoding="utf-8")
+                    with self.db.get_connection() as conn:
+                        row = conn.cursor().execute("SELECT * FROM topics WHERE id = ?", (topic_id,)).fetchone()
+                        latest_row = dict(row) if row else None
                 except Exception:
-                    pass
-            raise
+                    latest_row = None
+                if latest_row and latest_row.get("version", 0) > (target_expected_version or 0):
+                    self._sync_disk_from_db_row(topic_id, latest_row)
+                elif existing_disk_text is not None:
+                    try:
+                        md_file.write_text(existing_disk_text, encoding="utf-8")
+                    except Exception:
+                        pass
+                raise
+        else:
+            new_version = allocated_version
 
         if commit_msg:
             basis_str = f"用户指示: {user_opinion[:25]}..." if user_opinion else "用户明确决策"
@@ -414,17 +473,18 @@ class DecisionService:
         topic_id = self.validate_topic_id(data.get("id", ""))
         
         # 1. 幂等优先：若此请求 ID 之前已成功创建该议题，直接重放结果
+        cached_res = None
         if request_id:
             req_hash = hashlib.sha256(f"{topic_id}:{json.dumps(data, sort_keys=True, ensure_ascii=False)}".encode("utf-8")).hexdigest()
             is_valid, cached_res = self.db.check_idempotency(request_id, topic_id, req_hash)
             if not is_valid:
                 raise IdempotencyConflictError(f"请求 ID [{request_id}] 冲突：相同 ID 携带了不同的请求数据或目标议题")
-            if cached_res is not None and cached_res.get("status") in ("success", "completed"):
+            if cached_res is not None and (cached_res.get("status") in ("success", "completed") or cached_res.get("save_status") == "ok"):
                 return self._resume_pending_phases(cached_res, topic_id, data, request_id, req_hash)
 
-        # 2. 检查议题存在性
+        # 2. 检查议题存在性 (若已存在且并非同一未完成请求的重试，则报错)
         existing = self.db.get_topic(topic_id)
-        if existing:
+        if existing and not (cached_res and cached_res.get("status") in ("prepared", "applied")):
             raise TopicValidationError(f"议题 ID [{topic_id}] 已存在")
         return self.save_topic(topic_id=topic_id, data=data, expected_version=None, request_id=request_id)
 
@@ -480,7 +540,7 @@ class DecisionService:
         if "rounds" in topic_data and isinstance(topic_data["rounds"], list) and topic_data["rounds"]:
             return topic_data["rounds"]
 
-        discussion = topic_data.get("discussion") or []
+        discussion = topic_data.get("discussion") or topic_data.get("discussion_json") or []
         if isinstance(discussion, str):
             try:
                 discussion = json.loads(discussion)
@@ -539,6 +599,41 @@ class DecisionService:
             result.append(item)
 
         return result
+
+    def _sync_disk_from_db_row(self, topic_id: str, row: Dict[str, Any]):
+        """根据数据库获胜行同步磁盘 Markdown 文件，防止落败写入者覆盖获胜者 (F03)"""
+        try:
+            wf_state = row.get("workflow_state") or row.get("lifecycle_status", "discussing")
+            lifecycle_badge = self.get_lifecycle_badge(wf_state)
+            rounds = self._reconstruct_rounds_from_topic(row)
+            md_text = self.parser.serialize_markdown(
+                topic_id=topic_id,
+                title=row.get("title", topic_id),
+                lifecycle_badge=lifecycle_badge,
+                decision_status=row.get("decision_status", "已定"),
+                impl_status=row.get("impl_status", "未实现"),
+                priority=row.get("priority", "普通"),
+                obj=row.get("object", "通用系统"),
+                func=row.get("function", "核心规范"),
+                core_content=row.get("content", ""),
+                existing_rounds=rounds,
+                workflow_state=wf_state,
+                decision_outcome=row.get("decision_outcome", ""),
+                rejection_reason=row.get("rejection_reason", ""),
+                superseded_by=row.get("superseded_by", ""),
+                implementation_state=row.get("implementation_state", "not_started"),
+                impl_commit=row.get("impl_commit", ""),
+                impl_verifier=row.get("impl_verifier", ""),
+                version=row.get("version", 1),
+                section=row.get("section", "未分类")
+            )
+            md_file = self.config.decisions_dir / f"{topic_id}.md"
+            self.config.decisions_dir.mkdir(parents=True, exist_ok=True)
+            temp_file = md_file.with_suffix(f".tmp.{uuid.uuid4().hex[:8]}")
+            temp_file.write_text(md_text, encoding="utf-8")
+            self._atomic_replace(temp_file, md_file)
+        except Exception:
+            pass
 
     def restore_single_topic(
         self,
@@ -772,7 +867,7 @@ class DecisionService:
             temp_file = md_file.with_suffix(f".tmp.{uuid.uuid4().hex[:8]}")
             try:
                 temp_file.write_text(updated_md, encoding="utf-8")
-                os.replace(temp_file, md_file)
+                self._atomic_replace(temp_file, md_file)
             finally:
                 if temp_file.exists():
                     try:

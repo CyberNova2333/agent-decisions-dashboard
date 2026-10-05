@@ -138,7 +138,7 @@ def make_handler(server: DashboardServer):
                     allowed_hosts.add(srv_host)
                 if host in allowed_hosts:
                     origin_port = parsed_origin.port or (443 if parsed_origin.scheme == "https" else 80)
-                    srv_port = getattr(server, "port", None) or getattr(server.config, "port", 8765)
+                    srv_port = getattr(getattr(self, "server", None), "server_port", None) or getattr(server, "port", None) or getattr(server.config, "port", 8765)
                     if origin_port == srv_port:
                         return origin
 
