@@ -538,10 +538,20 @@ class DatabaseManager:
             target_summary = row["summary"]
             snapshot = json.loads(row["snapshot_json"])
 
+            # 获取回滚前各议题已知最新版本号，以分配单调递增版本，防止 ABA 并发令牌复用 (F08)
+            current_max_versions = {}
+            for r in cursor.execute("SELECT id, version FROM topics").fetchall():
+                current_max_versions[r["id"]] = r["version"] or 1
+
             # 清空当前业务表并按快照恢复 (复用当前写连接以避免自死锁)
             cursor.execute("DELETE FROM topics")
             for t in snapshot.get("topics", []):
-                self.upsert_topic(t, exact_version=t.get("version", 1), conn=conn)
+                tid = t["id"]
+                prior_max = current_max_versions.get(tid, 0)
+                snap_ver = t.get("version", 1)
+                new_ver = max(prior_max, snap_ver) + 1
+                t["version"] = new_ver
+                self.upsert_topic(t, exact_version=new_ver, conn=conn)
 
             cursor.execute("DELETE FROM settled_decisions")
             for s in snapshot.get("settled_decisions", []):
