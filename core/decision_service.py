@@ -503,14 +503,22 @@ class DecisionService:
                     archive_target = archive_dir / f"{p.stem}_{uuid.uuid4().hex[:6]}.md"
                     try:
                         shutil.move(str(p), str(archive_target))
-                    except Exception:
-                        p.unlink(missing_ok=True)
-                    staged_files.append(p)
+                        staged_files.append(p)
+                    except Exception as e:
+                        # 绝不静默删除源文件！必须保留原文件并中止破坏性操作 (F07)
+                        raise OSError(f"归档孤儿文件失败: {p.name} -> {e}") from e
 
         # 2. 写回快照中的所有 Markdown 文件 (原子替换并保持完整字段)
+        resolved_decisions_dir = self.config.decisions_dir.resolve()
         for t in target_topics:
             tid = t["id"]
-            md_file = self.config.decisions_dir / f"{tid}.md"
+            if not re.match(r'^[a-zA-Z0-9_\-]+$', tid):
+                raise ValueError(f"快照中包含非法的议题 ID: [{tid}]")
+            md_file = (self.config.decisions_dir / f"{tid}.md").resolve()
+            try:
+                md_file.relative_to(resolved_decisions_dir)
+            except ValueError:
+                raise ValueError(f"检测到非法路径越界: [{tid}]")
             wf_state = t.get("workflow_state") or t.get("lifecycle_status", "discussing")
             badge = self.get_lifecycle_badge(wf_state)
             rounds = self._reconstruct_rounds_from_topic(t)
