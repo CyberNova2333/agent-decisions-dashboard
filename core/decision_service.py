@@ -750,7 +750,7 @@ class DecisionService:
                         pass
 
             try:
-                self.db.upsert_topic(target_topic, exact_version=new_version, request_id=request_id)
+                self.db.upsert_topic(target_topic, expected_version=expected_version, exact_version=new_version, request_id=request_id)
                 new_rev = self.db.commit_revision(
                     action_type="TOPIC_RESTORE",
                     summary=f"针对性恢复议题 [{target_topic['title']}] 至快照 {rev_row['rev_hash']}",
@@ -759,7 +759,7 @@ class DecisionService:
                     diff_summary=f"restore_of={rev_row['rev_hash']}, rev_id={rev_id}, reason={reason or '用户按议题精准撤销'}"
                 )
             except Exception:
-                # 数据库写入失败时还原文件 (U05)
+                # 数据库写入或审计失败时，将 DB 与 Markdown 均恢复到操作前基线 (R01, R05)
                 if old_file_bytes is not None:
                     md_file.write_bytes(old_file_bytes)
                 elif md_file.exists():
@@ -767,6 +767,16 @@ class DecisionService:
                         md_file.unlink()
                     except OSError:
                         pass
+                if current:
+                    self.db.upsert_topic(
+                        current,
+                        exact_version=current["version"],
+                        request_id=current.get("last_request_id")
+                    )
+                else:
+                    with self.db.get_connection() as c:
+                        c.cursor().execute("DELETE FROM topics WHERE id = ?", (topic_id,))
+                        c.commit()
                 raise
 
             res = {
@@ -799,6 +809,12 @@ class DecisionService:
             except Exception:
                 if archive_target.exists():
                     shutil.move(str(archive_target), str(md_file))
+                if current:
+                    self.db.upsert_topic(
+                        current,
+                        exact_version=current["version"],
+                        request_id=current.get("last_request_id")
+                    )
                 raise
 
             res = {
@@ -987,17 +1003,19 @@ class DecisionService:
         new_impl_state = "verified" if mark_verified else "implemented"
         impl_note = f"{verifier}: {test_summary}".strip() if test_summary else verifier
 
+        current_ver = row["version"] if row["version"] is not None else 1
+        new_version = current_ver + 1
+
         data = dict(row)
         data["implementation_state"] = new_impl_state
         data["impl_status"] = "已核验" if mark_verified else "已实现"
         data["impl_commit"] = impl_commit
         data["impl_verifier"] = impl_note
 
-        new_version = self.db.upsert_topic(data)
-
-        # 更新 Markdown 权威文件 (保留原 section 等所有字段)
+        # 1. 更新 Markdown 权威文件 (在数据库修改前执行原子替换, R09)
         md_file = self.config.decisions_dir / f"{topic_id}.md"
         parsed = self.parser.parse_markdown_file(md_file)
+        orig_file_bytes = md_file.read_bytes() if md_file.exists() else None
         if parsed:
             section = data.get("section") or parsed.get("section", "未分类")
             wf_state = data.get("workflow_state") or parsed.get("workflow_state", "discussing")
@@ -1034,15 +1052,22 @@ class DecisionService:
                     except OSError:
                         pass
 
-        self.recovery.sync_metadata_json()
-
-        rev = self.db.commit_revision(
-            action_type="VERIFY_IMPLEMENTATION",
-            summary=f"核验实现: [{data['title']}] -> {new_impl_state} (Commit: {impl_commit})",
-            topic_id=topic_id,
-            author=verifier,
-            diff_summary=f"impl_commit={impl_commit}, verifier={impl_note}"
-        )
+        # 2. 文件替换成功后，原子更新数据库并提交快照，失败则逆向补偿
+        try:
+            self.db.upsert_topic(data, expected_version=current_ver, exact_version=new_version)
+            self.recovery.sync_metadata_json()
+            rev = self.db.commit_revision(
+                action_type="VERIFY_IMPLEMENTATION",
+                summary=f"核验实现: [{data['title']}] -> {new_impl_state} (Commit: {impl_commit})",
+                topic_id=topic_id,
+                author=verifier,
+                diff_summary=f"impl_commit={impl_commit}, verifier={impl_note}"
+            )
+        except Exception:
+            if orig_file_bytes is not None:
+                md_file.write_bytes(orig_file_bytes)
+            self.db.upsert_topic(row, exact_version=current_ver)
+            raise
 
         return {
             "status": "success",
