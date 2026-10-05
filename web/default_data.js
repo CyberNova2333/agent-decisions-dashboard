@@ -18,7 +18,7 @@ window.DASHBOARD_DEFAULT_DATA = {
       "priority": "最高",
       "summary": "采用单议题独立 Markdown 文件存储讨论细节，结合 SQLite 与 Git 自动提交实现生命周期闭环治理。",
       "rounds_count": 2,
-      "last_user_opinion": "确认方案，必须确保零外部重量级依赖，支持单机快速启动与 Git 离线回溯。",
+      "last_user_opinion": "要求系统保持极简轻量，采用标准库实现，支持单机快速启动与离线追溯。",
       "last_agent_reply": "已实现基于 Python 标准库的轻量服务器与自动化语义提交引擎。"
     }
   ],
