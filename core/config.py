@@ -116,6 +116,10 @@ class Config:
         return self._data.get("git_commit", DEFAULT_CONFIG["git_commit"])
 
     @property
+    def git_commit_enabled(self) -> bool:
+        return bool(self.git_commit.get("enabled", True))
+
+    @property
     def categories(self) -> Dict[str, Any]:
         return self._data.get("categories", DEFAULT_CONFIG["categories"])
 

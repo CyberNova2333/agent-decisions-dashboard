@@ -86,14 +86,41 @@ class DecisionService:
             if not is_valid:
                 raise IdempotencyConflictError(f"请求 ID [{request_id}] 冲突：相同 ID 携带了不同的请求数据或目标议题")
             if cached_res is not None:
-                # 若之前核心写入成功但导出待补做，在重放时补偿完成
+                # 若之前核心写入成功但导出待补做，在重放时补偿完成 (F04)
                 if cached_res.get("export_status") != "ok":
                     try:
                         self.recovery.sync_metadata_json()
                         cached_res["export_status"] = "ok"
-                        self.db.record_idempotency(request_id, topic_id, req_hash, cached_res, status="completed")
                     except Exception:
                         pass
+
+                # 若之前 Git 提交处于 pending 状态，在重放时继续执行未完成阶段 (F04)
+                if cached_res.get("git_status") == "pending" and self.config.git_commit_enabled:
+                    try:
+                        md_file = self.config.decisions_dir / f"{topic_id}.md"
+                        staged_targets = [md_file, self.config.database_path]
+                        if self.config.metadata_json_path.exists():
+                            staged_targets.append(self.config.metadata_json_path)
+                        user_op = (data.get("new_user_opinion") or data.get("user_opinion") or "").strip()
+                        agent_rep = (data.get("new_agent_reply") or data.get("agent_reply") or "").strip()
+                        commit_m = (data.get("commit_message") or "").strip()
+                        git_res = self.git.commit_decision(
+                            topic_title=cached_res.get("title", data.get("title", topic_id)),
+                            lifecycle_badge=self.get_lifecycle_badge(cached_res.get("workflow_state", "discussing")),
+                            summary=commit_m,
+                            user_opinion=user_op,
+                            agent_reply=agent_rep,
+                            staged_files=staged_targets
+                        )
+                        cached_res["git_status"] = git_res.status
+                        if git_res.commit_hash:
+                            cached_res["commit_hash"] = git_res.commit_hash
+                        if git_res.message:
+                            cached_res["git_message"] = git_res.message
+                    except Exception:
+                        pass
+
+                self.db.record_idempotency(request_id, topic_id, req_hash, cached_res, status="completed")
                 cached_res["is_replay"] = True
                 return cached_res
 
@@ -418,6 +445,14 @@ class DecisionService:
             if not is_valid:
                 raise IdempotencyConflictError(f"请求 ID [{request_id}] 冲突：相同 ID 携带了不同的请求数据或目标议题")
             if cached_res is not None:
+                # 若之前导出处于未完成或失败状态，重放时补偿完成 (F04)
+                if cached_res.get("export_status") != "ok":
+                    try:
+                        self.recovery.sync_metadata_json()
+                        cached_res["export_status"] = "ok"
+                        self.db.record_idempotency(request_id, topic_id, req_hash, cached_res, status="completed")
+                    except Exception:
+                        pass
                 cached_res["is_replay"] = True
                 return cached_res
 
