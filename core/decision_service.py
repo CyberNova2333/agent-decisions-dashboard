@@ -128,8 +128,19 @@ class DecisionService:
                             topic_id=topic_id
                         )
                     elif existing_row and not is_interrupted_prior_attempt:
-                        # 检测未入库的正文或元数据漂移 (F15)
-                        if parsed_disk.get("title") != existing_row.get("title") or parsed_disk.get("core_content", "").strip() != existing_row.get("content", "").strip():
+                        # 全量检测未入库的权威正文或元数据漂移 (F15, F09)
+                        db_wf = existing_row.get("workflow_state") or existing_row.get("lifecycle_status", "decided")
+                        disk_wf = parsed_disk.get("workflow_state") or parsed_disk.get("lifecycle_status", "decided")
+                        fields_to_check = [
+                            (parsed_disk.get("title"), existing_row.get("title")),
+                            (parsed_disk.get("core_content", "").strip(), existing_row.get("content", "").strip()),
+                            (parsed_disk.get("decision_outcome", "accepted"), existing_row.get("decision_outcome", "accepted")),
+                            (parsed_disk.get("rejection_reason", "").strip(), existing_row.get("rejection_reason", "").strip()),
+                            (disk_wf, db_wf),
+                            (parsed_disk.get("section", "未分类"), existing_row.get("section", "未分类")),
+                            (parsed_disk.get("implementation_state", "not_started"), existing_row.get("implementation_state", "not_started")),
+                        ]
+                        if any(d_val != b_val for d_val, b_val in fields_to_check):
                             raise VersionConflictError(
                                 current_version=disk_ver,
                                 expected_version=expected_version,
