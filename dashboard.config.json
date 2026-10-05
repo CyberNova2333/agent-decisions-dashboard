@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "project_name": "Agent Decisions Dashboard",
+  "project_subtitle": "Human-Agent Collaborative Governance & Decision Ledger",
+  "brand_logo": "AD",
+  "brand_icon": "⚖️",
+  "host": "127.0.0.1",
+  "port": 8765,
+  "decisions_dir": "decisions",
+  "database_path": "decisions.db",
+  "metadata_json_path": "decisions/metadata.json",
+  "doc_data_json_path": "doc_data.json",
+  "git_commit": {
+    "enabled": true,
+    "commit_prefix": "feat(decision)",
+    "co_author": "Antigravity <antigravity@google.com>",
+    "include_user_opinion": true,
+    "include_agent_reply": true
+  },
+  "categories": {
+    "objects": ["核心架构", "前端界面", "后端服务", "存储层", "DevOps"],
+    "functions": ["设计规范", "API协议", "安全策略", "性能调优", "运维部署"]
+  },
+  "lifecycle_states": [
+    {
+      "id": "decided",
+      "name": "已决策",
+      "badge": "🟢 已决策",
+      "badge_class": "badge-decided",
+      "description": "双方已明确拍板，形成不可推翻红线，不再重提"
+    },
+    {
+      "id": "discussing",
+      "name": "待讨论",
+      "badge": "🟡 待讨论",
+      "badge_class": "badge-discussing",
+      "description": "方向基本明确，技术细节、参数或数据结构待推敲"
+    },
+    {
+      "id": "pending",
+      "name": "待决策",
+      "badge": "🔴 待决策",
+      "badge_class": "badge-pending",
+      "description": "存在方案选型、卡点或分歧，等待明确拍板"
+    }
+  ]
+}
