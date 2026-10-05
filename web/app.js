@@ -23,6 +23,7 @@
       searchQuery: "",
     },
     isServerOnline: false,
+    pendingRestores: Object.create(null),
   };
 
   // Server/user strings must never be interpreted as HTML or executable JS.
@@ -837,10 +838,24 @@
           state.editSession = null;
           document.getElementById("modal-edit-decision").classList.remove("active");
         }
+        const savedTopicId = session.topicId;
         const undoAction = {
           text: "撤销这次提交",
-          onClick: () => {
-            openTimeMachine();
+          onClick: async () => {
+            state.selectedTopicId = savedTopicId;
+            try {
+              const logRes = await fetch(`/api/git/log?topic_id=${encodeURIComponent(savedTopicId)}&limit=5`);
+              if (logRes.ok) {
+                const logData = await logRes.json();
+                const revs = logData.revisions || [];
+                if (revs.length > 1) {
+                  await restoreSingleTopic(savedTopicId, revs[1].rev_id, true);
+                }
+              }
+            } catch (err) {
+              console.error("Undo failed:", err);
+            }
+            await openTimeMachine(savedTopicId);
           },
         };
         if (result.git_status === "committed") {
@@ -920,22 +935,77 @@
   }
 
   // Time Machine & Rollback
-  async function openTimeMachine() {
+  async function openTimeMachine(targetTopicId = null, offset = 0, append = false) {
+    if (targetTopicId !== null && targetTopicId !== undefined) {
+      state.selectedTopicId = targetTopicId;
+    }
     const drawer = document.getElementById("drawer-time-machine");
     const container = document.getElementById("drawer-history-list");
     drawer.classList.add("active");
-    container.innerHTML = `<div style="color: var(--text-dim); text-align: center; padding: 2rem;">加载历史快照中...</div>`;
+    if (!append) {
+      container.innerHTML = `<div style="color: var(--text-dim); text-align: center; padding: 2rem;">加载历史快照中...</div>`;
+    }
 
     try {
-      const url = state.selectedTopicId
-        ? `/api/git/log?topic_id=${encodeURIComponent(state.selectedTopicId)}&limit=100`
-        : `/api/git/log?limit=100`;
+      const topicParam = state.selectedTopicId ? `topic_id=${encodeURIComponent(state.selectedTopicId)}&` : "";
+      const url = `/api/git/log?${topicParam}limit=100&offset=${offset}`;
       const res = await fetch(url);
       if (!res.ok) throw new Error(`历史接口返回 HTTP ${res.status}`);
-      if (res.ok) {
-        const data = await res.json();
+      const data = await res.json();
+      const revisions = data.revisions || [];
+      const commits = data.commits || [];
+
+      let revsHtml = "";
+      revisions.forEach((r) => {
+        const hasTopicInSnapshot = Array.isArray(r.snapshot_topic_ids)
+          ? r.snapshot_topic_ids.includes(state.selectedTopicId)
+          : (!r.topic_id || r.topic_id === state.selectedTopicId);
+        revsHtml += `
+          <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.6rem 0.8rem; margin-bottom: 0.6rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.75rem; margin-bottom: 0.3rem;">
+              <span class="chip" style="font-family: var(--font-mono);">${escapeHtml(r.rev_hash)}</span>
+              <div style="display: flex; gap: 0.3rem;">
+                ${state.selectedTopicId ? (hasTopicInSnapshot ? `
+                  <button class="btn btn-secondary" style="font-size: 0.7rem; padding: 0.15rem 0.4rem; color: var(--color-primary);" data-history-action="restore" data-topic-id="${escapeHtml(state.selectedTopicId)}" data-revision-id="${escapeHtml(r.rev_id)}">
+                    ⏪ 仅回滚当前议题
+                  </button>
+                ` : `
+                  <button class="btn btn-secondary" style="font-size: 0.7rem; padding: 0.15rem 0.4rem; color: #f59e0b;" data-history-action="restore" data-topic-id="${escapeHtml(state.selectedTopicId)}" data-revision-id="${escapeHtml(r.rev_id)}">
+                    ⏪ 撤销创建（未包含该议题）
+                  </button>
+                `) : ""}
+                <button class="btn btn-secondary" style="font-size: 0.7rem; padding: 0.15rem 0.4rem; color: #ef4444;" data-history-action="rollback" data-revision-id="${escapeHtml(r.rev_id)}">
+                  ⚠️ 全库快照重置
+                </button>
+              </div>
+            </div>
+            <div style="font-size: 0.82rem; font-weight: 600;">${escapeHtml(r.summary)}</div>
+            ${r.diff_summary ? `<div style="font-size: 0.72rem; color: var(--text-dim); margin-top: 0.2rem;">${escapeHtml(r.diff_summary)}</div>` : ""}
+          </div>
+        `;
+      });
+
+      const nextOffset = offset + revisions.length;
+      const loadMoreHtml = revisions.length >= 100 ? `
+        <div id="history-load-more-container" style="text-align: center; margin: 1rem 0;">
+          <button class="btn btn-secondary" data-history-action="load-more" data-offset="${nextOffset}" style="width: 100%; font-size: 0.8rem; padding: 0.4rem;">
+            加载更多历史
+          </button>
+        </div>
+      ` : "";
+
+      if (append) {
+        document.getElementById("history-load-more-container")?.remove();
+        const revContainer = document.getElementById("time-machine-revisions-list");
+        if (revContainer) {
+          revContainer.insertAdjacentHTML("beforeend", revsHtml);
+        }
+        if (loadMoreHtml) {
+          container.insertAdjacentHTML("beforeend", loadMoreHtml);
+        }
+      } else {
         let commitsHtml = "";
-        (data.commits || []).forEach((c) => {
+        commits.forEach((c) => {
           commitsHtml += `
             <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.6rem 0.8rem; margin-bottom: 0.6rem;">
               <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.2rem;">
@@ -947,47 +1017,26 @@
           `;
         });
 
-        let revsHtml = "";
-        (data.revisions || []).forEach((r) => {
-          const hasTopicInSnapshot = Array.isArray(r.snapshot_topic_ids)
-            ? r.snapshot_topic_ids.includes(state.selectedTopicId)
-            : (!r.topic_id || r.topic_id === state.selectedTopicId);
-          revsHtml += `
-            <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.6rem 0.8rem; margin-bottom: 0.6rem;">
-              <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.75rem; margin-bottom: 0.3rem;">
-                <span class="chip" style="font-family: var(--font-mono);">${escapeHtml(r.rev_hash)}</span>
-                <div style="display: flex; gap: 0.3rem;">
-                  ${(state.selectedTopicId && hasTopicInSnapshot) ? `
-                    <button class="btn btn-secondary" style="font-size: 0.7rem; padding: 0.15rem 0.4rem; color: var(--color-primary);" data-history-action="restore" data-topic-id="${escapeHtml(state.selectedTopicId)}" data-revision-id="${escapeHtml(r.rev_id)}">
-                      ⏪ 仅回滚当前议题
-                    </button>
-                  ` : ""}
-                  <button class="btn btn-secondary" style="font-size: 0.7rem; padding: 0.15rem 0.4rem; color: #ef4444;" data-history-action="rollback" data-revision-id="${escapeHtml(r.rev_id)}">
-                    ⚠️ 全库快照重置
-                  </button>
-                </div>
-              </div>
-              <div style="font-size: 0.82rem; font-weight: 600;">${escapeHtml(r.summary)}</div>
-              ${r.diff_summary ? `<div style="font-size: 0.72rem; color: var(--text-dim); margin-top: 0.2rem;">${escapeHtml(r.diff_summary)}</div>` : ""}
-            </div>
-          `;
-        });
-
         container.innerHTML = `
           ${state.selectedTopicId ? `<div style="background: rgba(14,165,233,0.1); border: 1px solid rgba(14,165,233,0.3); border-radius: var(--radius-sm); padding: 0.5rem; font-size: 0.78rem; margin-bottom: 0.8rem;">当前选中议题：<code>#${escapeHtml(state.selectedTopicId)}</code>，可执行单议题精准回溯。</div>` : ""}
           <h4 style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 0.5rem; text-transform: uppercase;">Git 自动语义提交日志</h4>
           ${commitsHtml || '<div style="color: var(--text-muted); font-size: 0.8rem;">暂无提交</div>'}
           <h4 style="font-size: 0.82rem; color: var(--text-muted); margin: 1.2rem 0 0.5rem; text-transform: uppercase;">SQLite 历史快照 (Revisions)</h4>
-          ${revsHtml || '<div style="color: var(--text-muted); font-size: 0.8rem;">暂无快照</div>'}
+          <div id="time-machine-revisions-list">${revsHtml || '<div style="color: var(--text-muted); font-size: 0.8rem;">暂无快照</div>'}</div>
+          ${loadMoreHtml}
         `;
       }
     } catch (e) {
-      container.innerHTML = `<div style="color: #ef4444; padding: 2rem;">加载失败: ${escapeHtml(e.message)}</div>`;
+      if (!append) {
+        container.innerHTML = `<div style="color: #ef4444; padding: 2rem;">加载失败: ${escapeHtml(e.message)}</div>`;
+      } else {
+        showToast(`加载更多历史失败: ${e.message}`, "error");
+      }
     }
   }
 
   // P1-C: 单议题针对性回滚
-  async function restoreSingleTopic(topicId, revId) {
+  async function restoreSingleTopic(topicId, revId, keepDrawerOpen = false) {
     if (!Number.isSafeInteger(Number(revId)) || Number(revId) < 1) return;
     if (state.isRestoring) {
       showToast("已有恢复任务正在处理中，请勿重复操作", "warning");
@@ -996,10 +1045,18 @@
     if (!confirm(`将议题 [${topicId}] 恢复至快照 #${revId}？`)) return;
 
     state.isRestoring = true;
+    const restoreKey = `${topicId}:${revId}`;
     try {
-      const currentTopic = (state.topics || []).find((t) => t.id === topicId) || state.topicsDetailCache[topicId];
+      const currentTopic = (state.topicsMeta || []).find((t) => t.id === topicId) || state.topicsDetailCache[topicId];
+      if (currentTopic && (currentTopic.version === undefined || currentTopic.version === null)) {
+        showToast("无法获取当前议题版本，已终止恢复以防数据覆盖", "error");
+        return;
+      }
       const expectedVersion = currentTopic ? currentTopic.version : undefined;
-      const requestId = "restore-" + (window.crypto?.randomUUID?.() || (Date.now() + "-" + Math.random().toString(36).slice(2)));
+      if (!state.pendingRestores[restoreKey]) {
+        state.pendingRestores[restoreKey] = "restore-" + (window.crypto?.randomUUID?.() || (Date.now() + "-" + Math.random().toString(36).slice(2)));
+      }
+      const requestId = state.pendingRestores[restoreKey];
 
       const res = await fetch(`${topicPath(topicId)}/restore`, {
         method: "POST",
@@ -1013,12 +1070,22 @@
       });
       const data = await res.json();
       if (res.ok) {
-        closeDrawer("drawer-time-machine");
+        delete state.pendingRestores[restoreKey];
+        if (!keepDrawerOpen) {
+          closeDrawer("drawer-time-machine");
+        }
         delete state.topicsDetailCache[topicId];
         await loadMetadataList();
-        showToast(`⏪ 议题 [${topicId}] 已成功精准回滚至快照 ${data.restored_from}！`);
+        if (data.git_status === "git_error") {
+          showToast(`⏪ 议题 [${topicId}] 已成功精准回滚至快照 ${data.restored_from}，但 Git 提交失败: ${data.git_message || "Git 错误"}`, "warning");
+        } else {
+          showToast(`⏪ 议题 [${topicId}] 已成功精准回滚至快照 ${data.restored_from}！`);
+        }
       } else {
-        closeDrawer("drawer-time-machine");
+        delete state.pendingRestores[restoreKey];
+        if (!keepDrawerOpen) {
+          closeDrawer("drawer-time-machine");
+        }
         delete state.topicsDetailCache[topicId];
         await loadMetadataList();
         showToast(`单议题回滚失败: ${data.message || data.error}`, "error");
@@ -1045,7 +1112,11 @@
         closeDrawer("drawer-time-machine");
         state.topicsDetailCache = Object.create(null);
         await loadMetadataList();
-        showToast(`⏪ 全库已成功回滚至快照 ${data.rolled_back_to}！`);
+        if (data.git_status === "git_error") {
+          showToast(`⏪ 全库已成功回滚至快照 ${data.rolled_back_to}，但 Git 提交失败: ${data.git_message || "Git 错误"}`, "warning");
+        } else {
+          showToast(`⏪ 全库已成功回滚至快照 ${data.rolled_back_to}！`);
+        }
       } else {
         alert(`全库回滚失败: ${data.message || data.error}`);
       }
@@ -1161,9 +1232,14 @@
     document.getElementById("drawer-history-list")?.addEventListener("click", (event) => {
       const target = event.target instanceof Element ? event.target.closest("[data-history-action]") : null;
       if (!target || !event.currentTarget.contains(target)) return;
+      if (target.dataset.historyAction === "load-more") {
+        const offset = Number(target.dataset.offset) || 0;
+        openTimeMachine(state.selectedTopicId, offset, true);
+        return;
+      }
       const revision = Number(target.dataset.revisionId);
       if (!Number.isSafeInteger(revision) || revision < 1) return;
-      if (target.dataset.historyAction === "restore") restoreSingleTopic(target.dataset.topicId, revision);
+      if (target.dataset.historyAction === "restore") restoreSingleTopic(target.dataset.topicId || state.selectedTopicId, revision);
       if (target.dataset.historyAction === "rollback") rollbackRevision(revision);
     });
 
