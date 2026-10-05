@@ -118,15 +118,23 @@ class DecisionService:
         is_interrupted_prior_attempt = False
         db_already_updated = False
 
+        max_seq = self.db.get_topic_max_version(topic_id)
+        initial_version = (max_seq + 1) if max_seq > 0 else 1
+
         if cached_prep is not None:
             prep_allocated_ver = cached_prep.get("allocated_version")
-            if existing_row and prep_allocated_ver is not None and existing_row.get("version") == prep_allocated_ver:
+            if (
+                existing_row
+                and prep_allocated_ver is not None
+                and existing_row.get("version") == prep_allocated_ver
+                and (existing_row.get("last_request_id") == request_id if request_id else True)
+            ):
                 db_already_updated = True
                 is_interrupted_prior_attempt = True
                 allocated_version = prep_allocated_ver
             else:
                 is_interrupted_prior_attempt = True
-                allocated_version = prep_allocated_ver if prep_allocated_ver is not None else (current_db_ver + 1 if existing_row else 1)
+                allocated_version = prep_allocated_ver if prep_allocated_ver is not None else (current_db_ver + 1 if existing_row else initial_version)
                 if existing_row:
                     current_ver = existing_row.get("version", 1)
                     if expected_version is not None and expected_version != current_ver:
@@ -136,9 +144,9 @@ class DecisionService:
                             topic_id=topic_id
                         )
                 else:
-                    if expected_version is not None and expected_version != 1:
+                    if expected_version is not None and expected_version != initial_version:
                         raise VersionConflictError(
-                            current_version=0,
+                            current_version=max_seq,
                             expected_version=expected_version,
                             topic_id=topic_id
                         )
@@ -153,13 +161,13 @@ class DecisionService:
                     )
                 allocated_version = current_ver + 1
             else:
-                if expected_version is not None and expected_version != 1:
+                if expected_version is not None and expected_version != initial_version:
                     raise VersionConflictError(
-                        current_version=0,
+                        current_version=max_seq,
                         expected_version=expected_version,
                         topic_id=topic_id
                     )
-                allocated_version = 1
+                allocated_version = initial_version
 
         if md_file.exists():
             try:
@@ -275,9 +283,10 @@ class DecisionService:
         existing_doc = self.parser.parse_markdown_file(md_file)
         current_rounds = existing_doc["rounds"] if existing_doc else []
 
-        # 幂等重试防护：只有确认属于同一请求的中断重试，且磁盘文件已包含上一轮讨论时，才去重该轮次 (F01, F02)
+        # 幂等重试防护：只有确认属于同一请求的中断重试，且磁盘文件已包含上一轮讨论时，才去重该轮次 (F01, F02, U09)
         is_duplicate_round = False
-        if is_interrupted_prior_attempt and current_rounds and (user_opinion or agent_reply or commit_msg):
+        disk_ver = existing_doc.get("version") if existing_doc else None
+        if is_interrupted_prior_attempt and disk_ver == allocated_version and current_rounds and (user_opinion or agent_reply or commit_msg):
             last_r = current_rounds[-1]
             last_u = (last_r.get("user_opinion") or "").strip()
             last_a = (last_r.get("agent_reply") or "").strip()
@@ -334,7 +343,22 @@ class DecisionService:
                     pass
 
         # 6. 更新 SQLite 数据库结构化索引
-        discussion = json.loads(existing_row["discussion_json"]) if (existing_row and existing_row.get("discussion_json")) else []
+        # 优先基于权威 Markdown 既有轮次构建，确保手工直接修改的讨论内容不被陈旧的数据库字段覆盖 (F05, U11)
+        discussion = []
+        if existing_doc and existing_doc.get("rounds"):
+            for r in existing_doc["rounds"]:
+                rnd = r.get("round", len(discussion) + 1)
+                c_msg = (r.get("commit_message") or "").strip()
+                u_op = (r.get("user_opinion") or "").strip()
+                a_rep = (r.get("agent_reply") or "").strip()
+                if c_msg:
+                    discussion.append({"key": f"第 {rnd} 轮变更说明", "val": c_msg})
+                if u_op:
+                    discussion.append({"key": f"第 {rnd} 轮用户意见", "val": u_op})
+                if a_rep:
+                    discussion.append({"key": f"第 {rnd} 轮落实答复", "val": a_rep})
+        elif existing_row and existing_row.get("discussion_json"):
+            discussion = json.loads(existing_row["discussion_json"])
         
         has_commit = any(d.get("key") == f"第 {new_round_num} 轮变更说明" for d in discussion)
         has_opinion = any(d.get("key") == f"第 {new_round_num} 轮用户意见" for d in discussion)
@@ -368,7 +392,7 @@ class DecisionService:
                     "priority": priority,
                     "content": core_content,
                     "discussion": discussion
-                }, expected_version=target_expected_version, exact_version=allocated_version)
+                }, expected_version=target_expected_version, exact_version=allocated_version, request_id=request_id)
             except VersionConflictError:
                 try:
                     with self.db.get_connection() as conn:
