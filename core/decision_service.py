@@ -682,9 +682,42 @@ class DecisionService:
             if cached_res is not None and (cached_res.get("status") in ("success", "completed")):
                 return cached_res
 
-        # 2. 版本前置乐观锁核验 (F02, U03)
+        # 2. 版本前置乐观锁核验 (F02, U03) 与断点续做 (R03, R04)
         current_topic = self.db.get_topic(topic_id)
+        current = current_topic
         current_ver = current_topic.get("version", 1) if current_topic else 0
+
+        # 如果当前议题已经由本 request_id 完成写入，执行断点续做而不报错 409 (R03, R04)
+        if request_id and current_topic and current_topic.get("last_request_id") == request_id:
+            rev_row = self.db.get_revision_by_id(rev_id)
+            rev_list = self.db.get_revisions(limit=1, topic_id=topic_id)
+            latest_rev_hash = rev_list[0]["rev_hash"] if rev_list else (rev_row["rev_hash"] if rev_row else "")
+            self.recovery.sync_metadata_json()
+            res = {
+                "status": "success",
+                "topic": current_topic,
+                "new_version": current_topic["version"],
+                "restored_from": rev_row["rev_hash"] if rev_row else f"rev-{rev_id}",
+                "new_revision": latest_rev_hash,
+                "message": f"议题 [{topic_id}] 已成功恢复至快照（重放确认）"
+            }
+            if self.config.git_commit_enabled:
+                git_res = self.git.commit_decision(
+                    topic_id=topic_id,
+                    author=author,
+                    commit_message=f"恢复议题 [{topic_id}] 至快照",
+                    files=[self.config.decisions_dir / f"{topic_id}.md", self.config.metadata_json_path]
+                )
+                res["git_status"] = git_res.status
+                res["commit_hash"] = git_res.commit_hash or "none"
+                res["git_message"] = git_res.message
+            else:
+                res["git_status"] = "disabled"
+                res["commit_hash"] = "none"
+                res["git_message"] = "Git 自动提交已在配置中禁用"
+            self.db.record_idempotency(request_id, topic_id, req_hash, res)
+            return res
+
         if expected_version is not None and expected_version != current_ver:
             raise VersionConflictError(
                 current_version=current_ver,
@@ -749,8 +782,10 @@ class DecisionService:
                     except OSError:
                         pass
 
+            db_applied = False
             try:
                 self.db.upsert_topic(target_topic, expected_version=expected_version, exact_version=new_version, request_id=request_id)
+                db_applied = True
                 new_rev = self.db.commit_revision(
                     action_type="TOPIC_RESTORE",
                     summary=f"针对性恢复议题 [{target_topic['title']}] 至快照 {rev_row['rev_hash']}",
@@ -767,16 +802,17 @@ class DecisionService:
                         md_file.unlink()
                     except OSError:
                         pass
-                if current:
-                    self.db.upsert_topic(
-                        current,
-                        exact_version=current["version"],
-                        request_id=current.get("last_request_id")
-                    )
-                else:
-                    with self.db.get_connection() as c:
-                        c.cursor().execute("DELETE FROM topics WHERE id = ?", (topic_id,))
-                        c.commit()
+                if db_applied:
+                    if current:
+                        self.db.upsert_topic(
+                            current,
+                            exact_version=current["version"],
+                            request_id=current.get("last_request_id")
+                        )
+                    else:
+                        with self.db.get_connection() as c:
+                            c.cursor().execute("DELETE FROM topics WHERE id = ?", (topic_id,))
+                            c.commit()
                 raise
 
             res = {
