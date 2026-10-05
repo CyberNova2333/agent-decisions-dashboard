@@ -291,7 +291,15 @@ class RecoveryManager:
                 self.db.upsert_topic(item["data"], exact_version=item["version"], conn=conn)
             conn.commit()
 
-        # 3. 刷新派生物 metadata.json
+        # 3. 若重建后存在议题且快照链为空，建立初始基线快照以供撤销 (U14)
+        if parsed_items and len(self.db.get_revisions(limit=1)) == 0:
+            self.db.commit_revision(
+                action_type="BASELINE_IMPORT",
+                summary="初始化导入基线快照",
+                author="系统初始化"
+            )
+
+        # 4. 刷新派生物 metadata.json
         self.sync_metadata_json()
 
         rebuilt_ids = [item["id"] for item in parsed_items]

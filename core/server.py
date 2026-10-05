@@ -255,8 +255,20 @@ def make_handler(server: DashboardServer):
                 return
 
             elif path == "/api/git/log":
-                commits = server.git.get_commit_history(limit=30)
-                revisions = server.db.get_revisions(limit=30)
+                raw_limit = query_params.get("limit", ["30"])[0]
+                raw_offset = query_params.get("offset", ["0"])[0]
+                tid = query_params.get("topic_id", [None])[0]
+                try:
+                    limit_val = max(1, min(1000, int(raw_limit)))
+                except (ValueError, TypeError):
+                    limit_val = 30
+                try:
+                    offset_val = max(0, int(raw_offset))
+                except (ValueError, TypeError):
+                    offset_val = 0
+
+                commits = server.git.get_commit_history(limit=limit_val)
+                revisions = server.db.get_revisions(limit=limit_val, offset=offset_val, topic_id=tid)
                 self._send_json(200, {"commits": commits, "revisions": revisions})
                 return
 
