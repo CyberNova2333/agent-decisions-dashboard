@@ -7,7 +7,7 @@ Agent Decisions Dashboard - Git Engine
 import subprocess
 import shutil
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Any
 from dataclasses import dataclass, field
 from core.config import Config
 
