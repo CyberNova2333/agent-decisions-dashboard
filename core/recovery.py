@@ -195,10 +195,10 @@ class RecoveryManager:
         for p in md_files:
             try:
                 parsed = self.parser.parse_markdown_file(p)
-                if not parsed:
-                    continue
-
-                topic_id = parsed["id"]
+                topic_id = parsed.get("id") or p.stem
+                if not re.match(r'^[a-zA-Z0-9_\-]+$', topic_id) or topic_id != p.stem:
+                    errors.append({"file": p.name, "error": f"议题 ID 非法或与文件名不匹配: [{topic_id}] vs [{p.stem}]"})
+                    raise ValueError(f"发现非法或越界的议题 ID: [{topic_id}] in {p.name}")
                 if topic_id in seen_ids:
                     errors.append({"file": p.name, "error": f"发现重复的议题 ID: [{topic_id}]"})
                     continue
