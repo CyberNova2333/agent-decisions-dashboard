@@ -93,17 +93,19 @@ class DecisionService:
         topic_id = self.validate_topic_id(topic_id)
         op_id = f"op-{uuid.uuid4().hex[:8]}"
 
-        # 1. 幂等性检查 (指纹绑定 topic_id 与规范化 data)
-        req_hash = hashlib.sha256(f"{topic_id}:{json.dumps(data, sort_keys=True, ensure_ascii=False)}".encode("utf-8")).hexdigest()
+        # 1. 幂等性检查 (指纹绑定 topic_id, expected_version 与规范化 data, N05/N11)
+        req_hash = hashlib.sha256(f"{topic_id}:{expected_version}:{json.dumps(data, sort_keys=True, ensure_ascii=False)}".encode("utf-8")).hexdigest()
         cached_prep = None
         if request_id:
             is_valid, cached_res = self.db.check_idempotency(request_id, topic_id, req_hash)
             if not is_valid:
-                raise IdempotencyConflictError(f"请求 ID [{request_id}] 冲突：相同 ID 携带了不同的请求数据或目标议题")
+                raise IdempotencyConflictError(f"请求 ID [{request_id}] 冲突：相同 ID 携带了不同的请求数据、目标议题或预期版本")
             if cached_res is not None:
                 if cached_res.get("status") in ("success", "completed") or cached_res.get("save_status") == "ok":
                     return self._resume_pending_phases(cached_res, topic_id, data, request_id, req_hash)
                 elif cached_res.get("status") in ("prepared", "applied"):
+                    if cached_res.get("expected_version") != expected_version:
+                        raise IdempotencyConflictError(f"请求 ID [{request_id}] 冲突：预期版本由 {cached_res.get('expected_version')} 变更为 {expected_version}")
                     cached_prep = cached_res
 
         user_opinion = (data.get("new_user_opinion") or data.get("user_opinion") or "").strip()
@@ -422,6 +424,12 @@ class DecisionService:
                 basis=basis_str
             )
 
+        # 6.5. 获取保存前最新的历史快照 ID 作为防手滑撤销基线 (F01)
+        prev_revs = self.db.get_revisions(limit=1, topic_id=topic_id)
+        if not prev_revs:
+            prev_revs = self.db.get_revisions(limit=1)
+        prior_rev_id = prev_revs[0]["rev_id"] if prev_revs else None
+
         # 7. 提交 Revision 快照（在 Git 暂存 decisions.db 之前写入 DB，确保 Revision 进入 Git HEAD） (R10)
         rev_info = self.db.commit_revision(
             action_type="RECORD_DECISION",
@@ -441,6 +449,8 @@ class DecisionService:
             "topic_id": topic_id,
             "title": title,
             "new_version": new_version,
+            "previous_version": current_db_ver if existing_row else None,
+            "prior_rev_id": prior_rev_id,
             "round": new_round_num,
             "save_status": "ok",
             "export_status": "pending",
@@ -478,6 +488,8 @@ class DecisionService:
             "topic_id": topic_id,
             "title": title,
             "new_version": new_version,
+            "previous_version": current_db_ver if existing_row else None,
+            "prior_rev_id": prior_rev_id,
             "round": new_round_num,
             "save_status": "ok",
             "export_status": export_status,
@@ -502,7 +514,7 @@ class DecisionService:
         # 1. 幂等优先：若此请求 ID 之前已成功创建该议题，直接重放结果
         cached_res = None
         if request_id:
-            req_hash = hashlib.sha256(f"{topic_id}:{json.dumps(data, sort_keys=True, ensure_ascii=False)}".encode("utf-8")).hexdigest()
+            req_hash = hashlib.sha256(f"{topic_id}:None:{json.dumps(data, sort_keys=True, ensure_ascii=False)}".encode("utf-8")).hexdigest()
             is_valid, cached_res = self.db.check_idempotency(request_id, topic_id, req_hash)
             if not is_valid:
                 raise IdempotencyConflictError(f"请求 ID [{request_id}] 冲突：相同 ID 携带了不同的请求数据或目标议题")
@@ -676,50 +688,119 @@ class DecisionService:
         """
         topic_id = self.validate_topic_id(topic_id)
 
-        # 1. 幂等性校验 (F08, U04)
+        # 1. 幂等性校验 (F08, U04, N07)
         req_hash = hashlib.sha256(f"{topic_id}:restore:{rev_id}".encode("utf-8")).hexdigest()
+        cached_res = None
         if request_id:
             is_valid, cached_res = self.db.check_idempotency(request_id, topic_id, req_hash)
             if not is_valid:
-                raise IdempotencyConflictError(f"请求 ID [{request_id}] 冲突：相同 ID 携带了不同的请求数据或目标议题")
-            if cached_res is not None and (cached_res.get("status") in ("success", "completed")):
-                return cached_res
+                raise IdempotencyConflictError(f"请求 ID [{request_id}] 冲突：相同 ID 携带了不同的恢复目标快照或目标议题")
+            if cached_res is not None:
+                if (cached_res.get("status") in ("success", "completed") and cached_res.get("git_status") not in (None, "pending")):
+                    return cached_res
+                if cached_res.get("status") == "applied" or cached_res.get("git_status") == "pending":
+                    # 断点续做：补偿后续未完成的元数据导出与 Git 提交阶段 (N01, N02)
+                    self.recovery.sync_metadata_json()
+                    cached_res["export_status"] = "ok"
+                    git_res = self.git.commit_decision(
+                        topic_title=cached_res.get("topic", {}).get("title") if cached_res.get("topic") else f"撤销议题 {topic_id}",
+                        lifecycle_badge="单议题恢复" if cached_res.get("topic") else "撤销创建",
+                        summary=f"恢复议题 [{topic_id}] 至历史快照 #{rev_id} ({cached_res.get('restored_from', '')})",
+                        staged_files=[self.config.decisions_dir / f"{topic_id}.md", self.config.metadata_json_path, self.config.database_path]
+                    )
+                    cached_res["git_status"] = git_res.status
+                    cached_res["commit_hash"] = git_res.commit_hash or "none"
+                    cached_res["git_message"] = git_res.message
+                    cached_res["status"] = "success"
+                    self.db.record_idempotency(request_id, topic_id, req_hash, cached_res, status="completed")
+                    return cached_res
 
-        # 2. 版本前置乐观锁核验 (F02, U03) 与断点续做 (R03, R04)
+        # 2. 版本前置乐观锁核验 (F02, U03) 与断点续做 (R03, R04, N07, N08)
         current_topic = self.db.get_topic(topic_id)
         current = current_topic
         current_ver = current_topic.get("version", 1) if current_topic else 0
 
-        # 如果当前议题已经由本 request_id 完成写入，执行断点续做而不报错 409 (R03, R04)
+        # 如果当前议题已经由本 request_id 完成写入（可能在 commit_revision 前崩溃或已写入 DB）
         if request_id and current_topic and current_topic.get("last_request_id") == request_id:
             rev_row = self.db.get_revision_by_id(rev_id)
-            rev_list = self.db.get_revisions(limit=1, topic_id=topic_id)
-            latest_rev_hash = rev_list[0]["rev_hash"] if rev_list else (rev_row["rev_hash"] if rev_row else "")
+            if not rev_row:
+                raise ValueError(f"未找到指定的版本快照 #{rev_id}")
+
+            snapshot = json.loads(rev_row["snapshot_json"])
+            target_topic = next((t for t in snapshot.get("topics", []) if t["id"] == topic_id), None)
+            if target_topic and current_topic.get("title") != target_topic.get("title"):
+                raise IdempotencyConflictError(f"请求 ID [{request_id}] 冲突：目标快照 #{rev_id} 与已落盘议题不匹配")
+
+            rev_list = self.db.get_revisions(limit=10, topic_id=topic_id)
+            has_restore_rev = any(
+                r.get("action_type") == "TOPIC_RESTORE" and f"rev_id={rev_id}" in (r.get("diff_summary") or "")
+                for r in rev_list
+            )
+            conflict_rev = next(
+                (r for r in rev_list if r.get("action_type") == "TOPIC_RESTORE" and "rev_id=" in (r.get("diff_summary") or "") and f"rev_id={rev_id}" not in (r.get("diff_summary") or "")),
+                None
+            )
+            if conflict_rev:
+                raise IdempotencyConflictError(f"请求 ID [{request_id}] 冲突：该请求已被记录为其他恢复操作，不能别名到 #{rev_id}")
+
+            if not has_restore_rev:
+                new_rev = self.db.commit_revision(
+                    action_type="TOPIC_RESTORE",
+                    summary=f"针对性恢复议题 [{current_topic['title']}] 至快照 {rev_row['rev_hash']} (断点补偿)",
+                    topic_id=topic_id,
+                    author=author,
+                    diff_summary=f"restore_of={rev_row['rev_hash']}, rev_id={rev_id}, reason={reason or '用户按议题精准撤销 (断点补偿)'}"
+                )
+                latest_rev_hash = new_rev["rev_hash"]
+            else:
+                latest_rev_hash = rev_list[0]["rev_hash"]
+
             self.recovery.sync_metadata_json()
             res = {
                 "status": "success",
                 "topic": current_topic,
                 "new_version": current_topic["version"],
-                "restored_from": rev_row["rev_hash"] if rev_row else f"rev-{rev_id}",
+                "restored_from": rev_row["rev_hash"],
                 "new_revision": latest_rev_hash,
                 "message": f"议题 [{topic_id}] 已成功恢复至快照（重放确认）"
             }
-            if self.config.git_commit_enabled:
+            git_res = self.git.commit_decision(
+                topic_title=current_topic["title"],
+                lifecycle_badge=self.get_lifecycle_badge(current_topic.get("workflow_state") or current_topic.get("lifecycle_status", "discussing")),
+                summary=f"恢复议题 [{topic_id}] 至历史快照 #{rev_id} ({rev_row['rev_hash']})",
+                staged_files=[self.config.decisions_dir / f"{topic_id}.md", self.config.metadata_json_path, self.config.database_path]
+            )
+            res["git_status"] = git_res.status
+            res["commit_hash"] = git_res.commit_hash or "none"
+            res["git_message"] = git_res.message
+            self.db.record_idempotency(request_id, topic_id, req_hash, res, status="completed")
+            return res
+
+        # 针对撤销创建的断点续做（数据库中该议题已被删除） (N02)
+        if request_id and current_topic is None:
+            rev_list = self.db.get_revisions(limit=5, topic_id=topic_id)
+            undo_rev = next((r for r in rev_list if r.get("action_type") == "TOPIC_REMOVE" and f"undo_creation_of={topic_id}" in (r.get("diff_summary") or "") and f"rev_id={rev_id}" in (r.get("diff_summary") or "")), None)
+            if undo_rev:
+                self.recovery.sync_metadata_json()
+                res = {
+                    "status": "success",
+                    "topic": None,
+                    "new_version": 0,
+                    "restored_from": f"rev-{rev_id}",
+                    "new_revision": undo_rev["rev_hash"],
+                    "message": f"议题 [{topic_id}] 已成功撤销创建（重放确认）"
+                }
                 git_res = self.git.commit_decision(
-                    topic_id=topic_id,
-                    author=author,
-                    commit_message=f"恢复议题 [{topic_id}] 至快照",
-                    files=[self.config.decisions_dir / f"{topic_id}.md", self.config.metadata_json_path]
+                    topic_title=f"撤销议题 {topic_id}",
+                    lifecycle_badge="撤销创建",
+                    summary=f"撤销新建议题 [{topic_id}]（回退至未创建快照 #{rev_id}）",
+                    staged_files=[self.config.decisions_dir / f"{topic_id}.md", self.config.metadata_json_path, self.config.database_path]
                 )
                 res["git_status"] = git_res.status
                 res["commit_hash"] = git_res.commit_hash or "none"
                 res["git_message"] = git_res.message
-            else:
-                res["git_status"] = "disabled"
-                res["commit_hash"] = "none"
-                res["git_message"] = "Git 自动提交已在配置中禁用"
-            self.db.record_idempotency(request_id, topic_id, req_hash, res)
-            return res
+                self.db.record_idempotency(request_id, topic_id, req_hash, res, status="completed")
+                return res
 
         if expected_version is not None and expected_version != current_ver:
             raise VersionConflictError(
@@ -777,7 +858,7 @@ class DecisionService:
             try:
                 temp_file.write_text(md_text, encoding="utf-8")
                 # 文件原子替换在数据库修改前执行 (F06, U05)
-                os.replace(temp_file, md_file)
+                self._atomic_replace(temp_file, md_file)
             finally:
                 if temp_file.exists():
                     try:
@@ -796,6 +877,14 @@ class DecisionService:
                     author=author,
                     diff_summary=f"restore_of={rev_row['rev_hash']}, rev_id={rev_id}, reason={reason or '用户按议题精准撤销'}"
                 )
+            except VersionConflictError:
+                # 乐观锁冲突：获胜写入者已先于本操作入库，绝不能用陈旧字节回滚覆盖获胜者的磁盘文件 (F07, N04)
+                latest_row = self.db.get_topic(topic_id)
+                if latest_row and latest_row.get("version", 0) > (expected_version or 0):
+                    self._sync_disk_from_db_row(topic_id, latest_row)
+                elif old_file_bytes is not None:
+                    md_file.write_bytes(old_file_bytes)
+                raise
             except Exception:
                 # 数据库写入或审计失败时，将 DB 与 Markdown 均恢复到操作前基线 (R01, R05)
                 if old_file_bytes is not None:
@@ -819,13 +908,17 @@ class DecisionService:
                 raise
 
             res = {
-                "status": "success",
+                "status": "applied",
                 "topic": target_topic,
                 "new_version": new_version,
                 "restored_from": rev_row["rev_hash"],
                 "new_revision": new_rev["rev_hash"],
+                "git_status": "pending",
+                "export_status": "pending",
                 "message": f"议题 [{topic_id}] 已成功恢复至快照 {rev_row['rev_hash']}"
             }
+            if request_id:
+                self.db.record_idempotency(request_id, topic_id, req_hash, res, status="applied")
         else:
             # 撤销新建议题 (F07, U02)
             archive_dir = self.config.decisions_dir / ".archived_rollback"
@@ -836,8 +929,17 @@ class DecisionService:
 
             try:
                 with self.db.get_connection() as conn:
-                    conn.cursor().execute("DELETE FROM topics WHERE id = ?", (topic_id,))
+                    cursor = conn.cursor()
+                    if expected_version is not None:
+                        cursor.execute("DELETE FROM topics WHERE id = ? AND version = ?", (topic_id, expected_version))
+                    else:
+                        cursor.execute("DELETE FROM topics WHERE id = ?", (topic_id,))
+                    if cursor.rowcount == 0:
+                        cur_row = self.db.get_topic(topic_id)
+                        cur_v = cur_row.get("version", 0) if cur_row else 0
+                        raise VersionConflictError(current_version=cur_v, expected_version=expected_version, topic_id=topic_id)
                     conn.commit()
+
                 new_rev = self.db.commit_revision(
                     action_type="TOPIC_REMOVE",
                     summary=f"撤销新建议题 [{topic_id}]（回退至未创建快照 {rev_row['rev_hash']}）",
@@ -854,19 +956,27 @@ class DecisionService:
                         exact_version=current["version"],
                         request_id=current.get("last_request_id")
                     )
+                latest_row = self.db.get_topic(topic_id)
+                if latest_row:
+                    self._sync_disk_from_db_row(topic_id, latest_row)
                 raise
 
             res = {
-                "status": "success",
+                "status": "applied",
                 "topic": None,
                 "new_version": 0,
                 "restored_from": rev_row["rev_hash"],
                 "new_revision": new_rev["rev_hash"],
+                "git_status": "pending",
+                "export_status": "pending",
                 "message": f"议题 [{topic_id}] 已成功撤销创建（回退至快照 {rev_row['rev_hash']}）"
             }
+            if request_id:
+                self.db.record_idempotency(request_id, topic_id, req_hash, res, status="applied")
 
         # 5. 同步 metadata.json
         self.recovery.sync_metadata_json()
+        res["export_status"] = "ok"
 
         # 6. 执行受控 Git 提交并透传结果 (F08, U12)
         git_res = self.git.commit_decision(
@@ -876,9 +986,10 @@ class DecisionService:
             staged_files=[md_file, self.config.metadata_json_path, self.config.database_path]
         )
         res["git_status"] = git_res.status
-        res["commit_hash"] = git_res.commit_hash
+        res["commit_hash"] = git_res.commit_hash or "none"
         res["git_message"] = git_res.message
 
+        res["status"] = "success"
         if request_id:
             self.db.record_idempotency(request_id, topic_id, req_hash, res, status="completed")
 
@@ -1090,6 +1201,7 @@ class DecisionService:
         md_file = self.config.decisions_dir / f"{topic_id}.md"
         parsed = self.parser.parse_markdown_file(md_file)
         orig_file_bytes = md_file.read_bytes() if md_file.exists() else None
+        orig_metadata_bytes = self.config.metadata_json_path.read_bytes() if self.config.metadata_json_path.exists() else None
         if parsed:
             section = data.get("section") or parsed.get("section", "未分类")
             wf_state = data.get("workflow_state") or parsed.get("workflow_state", "discussing")
@@ -1141,6 +1253,13 @@ class DecisionService:
             if orig_file_bytes is not None:
                 md_file.write_bytes(orig_file_bytes)
             self.db.upsert_topic(row, exact_version=current_ver)
+            if orig_metadata_bytes is not None:
+                self.config.metadata_json_path.write_bytes(orig_metadata_bytes)
+            elif self.config.metadata_json_path.exists():
+                try:
+                    self.config.metadata_json_path.unlink()
+                except OSError:
+                    pass
             raise
 
         return {
