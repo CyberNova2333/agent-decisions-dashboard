@@ -664,71 +664,174 @@ class DecisionService:
         topic_id: str,
         rev_id: int,
         author: str = "人类/Agent",
-        reason: str = ""
+        reason: str = "",
+        expected_version: Optional[int] = None,
+        request_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        P1-C: 精准恢复单个议题至历史快照状态，不波及其他议题，并保留完整字段与轮次结构 (R06)
+        P1-C: 精准恢复单个议题至历史快照状态，不波及其他议题，并保留完整字段与轮次结构 (R06, F02, F06, F07, F08)
         """
         topic_id = self.validate_topic_id(topic_id)
-        res = self.db.restore_topic_from_revision(topic_id, rev_id, author, reason)
-        topic_data = res["topic"]
 
-        # 写回该议题的 Markdown 文本
+        # 1. 幂等性校验 (F08, U04)
+        req_hash = hashlib.sha256(f"{topic_id}:restore:{rev_id}".encode("utf-8")).hexdigest()
+        if request_id:
+            is_valid, cached_res = self.db.check_idempotency(request_id, topic_id, req_hash)
+            if not is_valid:
+                raise IdempotencyConflictError(f"请求 ID [{request_id}] 冲突：相同 ID 携带了不同的请求数据或目标议题")
+            if cached_res is not None and (cached_res.get("status") in ("success", "completed")):
+                return cached_res
+
+        # 2. 版本前置乐观锁核验 (F02, U03)
+        current_topic = self.db.get_topic(topic_id)
+        current_ver = current_topic.get("version", 1) if current_topic else 0
+        if expected_version is not None and expected_version != current_ver:
+            raise VersionConflictError(
+                current_version=current_ver,
+                expected_version=expected_version,
+                topic_id=topic_id
+            )
+
+        # 3. 读取目标快照
+        rev_row = self.db.get_revision_by_id(rev_id)
+        if not rev_row:
+            raise ValueError(f"未找到指定的版本快照 #{rev_id}")
+
+        snapshot = json.loads(rev_row["snapshot_json"])
+        target_topic = None
+        for t in snapshot.get("topics", []):
+            if t["id"] == topic_id:
+                target_topic = t
+                break
+
         md_file = self.config.decisions_dir / f"{topic_id}.md"
-        wf_state = topic_data.get("workflow_state") or topic_data.get("lifecycle_status", "discussing")
-        lifecycle_badge = self.get_lifecycle_badge(wf_state)
-        
-        rounds = self._reconstruct_rounds_from_topic(topic_data)
+        old_file_bytes = md_file.read_bytes() if md_file.exists() else None
 
-        md_text = self.parser.serialize_markdown(
-            topic_id=topic_id,
-            title=topic_data["title"],
-            lifecycle_badge=lifecycle_badge,
-            decision_status=topic_data.get("decision_status", "已定"),
-            impl_status=topic_data.get("impl_status", "未实现"),
-            priority=topic_data.get("priority", "普通"),
-            obj=topic_data.get("object", "通用系统"),
-            func=topic_data.get("function", "核心规范"),
-            core_content=topic_data.get("content", ""),
-            existing_rounds=rounds,
-            workflow_state=wf_state,
-            decision_outcome=topic_data.get("decision_outcome", ""),
-            rejection_reason=topic_data.get("rejection_reason", ""),
-            superseded_by=topic_data.get("superseded_by", ""),
-            implementation_state=topic_data.get("implementation_state", "not_started"),
-            impl_commit=topic_data.get("impl_commit", ""),
-            impl_verifier=topic_data.get("impl_verifier", ""),
-            version=res["new_version"],
-            section=topic_data.get("section", "未分类")
-        )
-        self.config.decisions_dir.mkdir(parents=True, exist_ok=True)
-        temp_file = md_file.with_suffix(f".tmp.{uuid.uuid4().hex[:8]}")
-        try:
-            temp_file.write_text(md_text, encoding="utf-8")
-            os.replace(temp_file, md_file)
-        finally:
-            if temp_file.exists():
-                try:
-                    temp_file.unlink()
-                except OSError:
-                    pass
+        # 4. 判断恢复语义：快照中存在该议题 vs 快照中无该议题（撤销创建）(F07, U02)
+        if target_topic is not None:
+            # 单议题正常回溯
+            new_version = max(self.db.get_topic_max_version(topic_id), current_ver) + 1
+            wf_state = target_topic.get("workflow_state") or target_topic.get("lifecycle_status", "discussing")
+            lifecycle_badge = self.get_lifecycle_badge(wf_state)
+            rounds = self._reconstruct_rounds_from_topic(target_topic)
 
-        # 同步 metadata.json
+            md_text = self.parser.serialize_markdown(
+                topic_id=topic_id,
+                title=target_topic["title"],
+                lifecycle_badge=lifecycle_badge,
+                decision_status=target_topic.get("decision_status", "已定"),
+                impl_status=target_topic.get("impl_status", "未实现"),
+                priority=target_topic.get("priority", "普通"),
+                obj=target_topic.get("object", "通用系统"),
+                func=target_topic.get("function", "核心规范"),
+                core_content=target_topic.get("content", ""),
+                existing_rounds=rounds,
+                workflow_state=wf_state,
+                decision_outcome=target_topic.get("decision_outcome", ""),
+                rejection_reason=target_topic.get("rejection_reason", ""),
+                superseded_by=target_topic.get("superseded_by", ""),
+                implementation_state=target_topic.get("implementation_state", "not_started"),
+                impl_commit=target_topic.get("impl_commit", ""),
+                impl_verifier=target_topic.get("impl_verifier", ""),
+                version=new_version,
+                section=target_topic.get("section", "未分类")
+            )
+            self.config.decisions_dir.mkdir(parents=True, exist_ok=True)
+            temp_file = md_file.with_suffix(f".tmp.{uuid.uuid4().hex[:8]}")
+            try:
+                temp_file.write_text(md_text, encoding="utf-8")
+                # 文件原子替换在数据库修改前执行 (F06, U05)
+                os.replace(temp_file, md_file)
+            finally:
+                if temp_file.exists():
+                    try:
+                        temp_file.unlink()
+                    except OSError:
+                        pass
+
+            try:
+                self.db.upsert_topic(target_topic, exact_version=new_version, request_id=request_id)
+                new_rev = self.db.commit_revision(
+                    action_type="TOPIC_RESTORE",
+                    summary=f"针对性恢复议题 [{target_topic['title']}] 至快照 {rev_row['rev_hash']}",
+                    topic_id=topic_id,
+                    author=author,
+                    diff_summary=f"restore_of={rev_row['rev_hash']}, rev_id={rev_id}, reason={reason or '用户按议题精准撤销'}"
+                )
+            except Exception:
+                # 数据库写入失败时还原文件 (U05)
+                if old_file_bytes is not None:
+                    md_file.write_bytes(old_file_bytes)
+                elif md_file.exists():
+                    try:
+                        md_file.unlink()
+                    except OSError:
+                        pass
+                raise
+
+            res = {
+                "status": "success",
+                "topic": target_topic,
+                "new_version": new_version,
+                "restored_from": rev_row["rev_hash"],
+                "new_revision": new_rev["rev_hash"],
+                "message": f"议题 [{topic_id}] 已成功恢复至快照 {rev_row['rev_hash']}"
+            }
+        else:
+            # 撤销新建议题 (F07, U02)
+            archive_dir = self.config.decisions_dir / ".archived_rollback"
+            archive_dir.mkdir(parents=True, exist_ok=True)
+            archive_target = archive_dir / f"{topic_id}_{uuid.uuid4().hex[:6]}.md"
+            if md_file.exists():
+                shutil.move(str(md_file), str(archive_target))
+
+            try:
+                with self.db.get_connection() as conn:
+                    conn.cursor().execute("DELETE FROM topics WHERE id = ?", (topic_id,))
+                    conn.commit()
+                new_rev = self.db.commit_revision(
+                    action_type="TOPIC_REMOVE",
+                    summary=f"撤销新建议题 [{topic_id}]（回退至未创建快照 {rev_row['rev_hash']}）",
+                    topic_id=topic_id,
+                    author=author,
+                    diff_summary=f"undo_creation_of={topic_id}, rev_id={rev_id}"
+                )
+            except Exception:
+                if archive_target.exists():
+                    shutil.move(str(archive_target), str(md_file))
+                raise
+
+            res = {
+                "status": "success",
+                "topic": None,
+                "new_version": 0,
+                "restored_from": rev_row["rev_hash"],
+                "new_revision": new_rev["rev_hash"],
+                "message": f"议题 [{topic_id}] 已成功撤销创建（回退至快照 {rev_row['rev_hash']}）"
+            }
+
+        # 5. 同步 metadata.json
         self.recovery.sync_metadata_json()
 
-        # 执行受控 Git 提交
-        self.git.commit_decision(
-            topic_title=topic_data["title"],
-            lifecycle_badge="单议题恢复",
-            summary=f"恢复议题 [{topic_id}] 至历史快照 #{rev_id} ({res['restored_from']})",
+        # 6. 执行受控 Git 提交并透传结果 (F08, U12)
+        git_res = self.git.commit_decision(
+            topic_title=target_topic["title"] if target_topic else f"撤销议题 {topic_id}",
+            lifecycle_badge="单议题恢复" if target_topic else "撤销创建",
+            summary=f"恢复议题 [{topic_id}] 至历史快照 #{rev_id} ({rev_row['rev_hash']})",
             staged_files=[md_file, self.config.metadata_json_path, self.config.database_path]
         )
+        res["git_status"] = git_res.status
+        res["commit_hash"] = git_res.commit_hash
+        res["git_message"] = git_res.message
+
+        if request_id:
+            self.db.record_idempotency(request_id, topic_id, req_hash, res, status="completed")
 
         return res
 
     def rollback_full(self, rev_id: int, author: str = "人类/Agent") -> Dict[str, Any]:
         """
-        P1-C: 全库恢复至指定快照，同时清理目标快照外的多余文件并保持字段完整 (R05, R06, F04)
+        P1-C: 全库恢复至指定快照，同时清理目标快照外的多余文件并保持字段完整 (R05, R06, F04, F06)
         """
         # 0. 预检快照有效性及路径安全，在产生任何状态变更前完成强校验 (F04, I07)
         rev_row = self.db.get_revision_by_id(rev_id)
@@ -750,87 +853,118 @@ class DecisionService:
 
         target_ids = {t["id"] for t in target_topics}
 
-        # 1. 处理快照之外的多余现存文件：移入归档区并暂存 Git 删除，归档失败必须还原文件并终止，绝不影响数据库 (F04, F07, I08)
+        # 备份数据库文件与当前 live 文件，以实现真正的原子性故障回滚 (U06, U07)
+        db_path = self.config.database_path
+        db_backup = db_path.with_suffix(f".bak.{uuid.uuid4().hex[:8]}")
+        shutil.copy2(db_path, db_backup)
+
+        live_backups = {}
+        if self.config.decisions_dir.exists():
+            for p in self.config.decisions_dir.glob("*.md"):
+                live_backups[p.name] = p.read_bytes()
+
         archive_dir = self.config.decisions_dir / ".archived_rollback"
         archived_moves = []
         staged_files = [self.config.metadata_json_path, self.config.database_path]
 
-        if self.config.decisions_dir.exists():
-            for p in self.config.decisions_dir.glob("*.md"):
-                if p.stem not in target_ids:
-                    archive_dir.mkdir(parents=True, exist_ok=True)
-                    archive_target = archive_dir / f"{p.stem}_{uuid.uuid4().hex[:6]}.md"
-                    try:
+        try:
+            # 1. 归档快照之外的多余文件
+            if self.config.decisions_dir.exists():
+                for p in self.config.decisions_dir.glob("*.md"):
+                    if p.stem not in target_ids:
+                        archive_dir.mkdir(parents=True, exist_ok=True)
+                        archive_target = archive_dir / f"{p.stem}_{uuid.uuid4().hex[:6]}.md"
                         shutil.move(str(p), str(archive_target))
                         archived_moves.append((archive_target, p))
                         staged_files.append(p)
-                    except Exception as e:
-                        # 归档失败时还原已移动的文件，中止破坏性操作，绝不改变数据库 (F04, F07, I08)
-                        for moved_target, orig_src in reversed(archived_moves):
-                            try:
-                                shutil.move(str(moved_target), str(orig_src))
-                            except Exception:
-                                pass
-                        raise OSError(f"归档孤儿文件失败: {p.name} -> {e}") from e
 
-        # 2. 校验与文件归档全部成功后，原子执行数据库回滚
-        res = self.db.rollback_revision(rev_id, author)
-        snapshot = res["snapshot"]
-        target_topics = snapshot.get("topics", [])
+            # 2. 校验与文件归档全部成功后，原子执行数据库回滚
+            res = self.db.rollback_revision(rev_id, author)
 
-        # 3. 写回快照中的所有 Markdown 文件 (原子替换并保持完整字段)
-        for t in target_topics:
-            tid = t["id"]
-            md_file = (self.config.decisions_dir / f"{tid}.md").resolve()
-            wf_state = t.get("workflow_state") or t.get("lifecycle_status", "discussing")
-            badge = self.get_lifecycle_badge(wf_state)
-            rounds = self._reconstruct_rounds_from_topic(t)
+            # 3. 写回快照中的所有 Markdown 文件 (原子替换并保持完整字段)
+            for t in target_topics:
+                tid = t["id"]
+                md_file = (self.config.decisions_dir / f"{tid}.md").resolve()
+                wf_state = t.get("workflow_state") or t.get("lifecycle_status", "discussing")
+                badge = self.get_lifecycle_badge(wf_state)
+                rounds = self._reconstruct_rounds_from_topic(t)
 
-            md_text = self.parser.serialize_markdown(
-                topic_id=tid,
-                title=t["title"],
-                lifecycle_badge=badge,
-                decision_status=t.get("decision_status", "已定"),
-                impl_status=t.get("impl_status", "未实现"),
-                priority=t.get("priority", "普通"),
-                obj=t.get("object", "通用系统"),
-                func=t.get("function", "核心规范"),
-                core_content=t.get("content", ""),
-                existing_rounds=rounds,
-                workflow_state=wf_state,
-                decision_outcome=t.get("decision_outcome", ""),
-                rejection_reason=t.get("rejection_reason", ""),
-                superseded_by=t.get("superseded_by", ""),
-                implementation_state=t.get("implementation_state", "not_started"),
-                impl_commit=t.get("impl_commit", ""),
-                impl_verifier=t.get("impl_verifier", ""),
-                version=t.get("version", 1),
-                section=t.get("section", "未分类")
+                md_text = self.parser.serialize_markdown(
+                    topic_id=tid,
+                    title=t["title"],
+                    lifecycle_badge=badge,
+                    decision_status=t.get("decision_status", "已定"),
+                    impl_status=t.get("impl_status", "未实现"),
+                    priority=t.get("priority", "普通"),
+                    obj=t.get("object", "通用系统"),
+                    func=t.get("function", "核心规范"),
+                    core_content=t.get("content", ""),
+                    existing_rounds=rounds,
+                    workflow_state=wf_state,
+                    decision_outcome=t.get("decision_outcome", ""),
+                    rejection_reason=t.get("rejection_reason", ""),
+                    superseded_by=t.get("superseded_by", ""),
+                    implementation_state=t.get("implementation_state", "not_started"),
+                    impl_commit=t.get("impl_commit", ""),
+                    impl_verifier=t.get("impl_verifier", ""),
+                    version=t.get("version", 1),
+                    section=t.get("section", "未分类")
+                )
+                temp_file = md_file.with_suffix(f".tmp.{uuid.uuid4().hex[:8]}")
+                try:
+                    temp_file.write_text(md_text, encoding="utf-8")
+                    os.replace(temp_file, md_file)
+                finally:
+                    if temp_file.exists():
+                        try:
+                            temp_file.unlink()
+                        except OSError:
+                            pass
+                staged_files.append(md_file)
+
+            # 4. 刷新 metadata.json
+            self.recovery.sync_metadata_json()
+
+            # 5. 递交 Git 提交并透传结果 (F08, U12)
+            git_res = self.git.commit_decision(
+                topic_title="全库快照回滚",
+                lifecycle_badge="时间旅行",
+                summary=f"全库回滚至快照 #{rev_id} ({res['rolled_back_to']})",
+                staged_files=staged_files
             )
-            temp_file = md_file.with_suffix(f".tmp.{uuid.uuid4().hex[:8]}")
-            try:
-                temp_file.write_text(md_text, encoding="utf-8")
-                os.replace(temp_file, md_file)
-            finally:
-                if temp_file.exists():
+            res["git_status"] = git_res.status
+            res["commit_hash"] = git_res.commit_hash
+            res["git_message"] = git_res.message
+
+            return res
+        except Exception:
+            # 全流程故障还原补偿 (U06, U07)
+            # 1. 还原数据库
+            if db_backup.exists():
+                shutil.copy2(db_backup, db_path)
+            # 2. 还原 live 目录下的所有文件
+            for p in self.config.decisions_dir.glob("*.md"):
+                if p.name not in live_backups:
                     try:
-                        temp_file.unlink()
+                        p.unlink()
                     except OSError:
                         pass
-            staged_files.append(md_file)
-
-        # 3. 刷新 metadata.json
-        self.recovery.sync_metadata_json()
-
-        # 4. 递交 Git 提交
-        self.git.commit_decision(
-            topic_title="全库快照回滚",
-            lifecycle_badge="时间旅行",
-            summary=f"全库回滚至快照 #{rev_id} ({res['rolled_back_to']})",
-            staged_files=staged_files
-        )
-
-        return res
+            for fname, content in live_backups.items():
+                (self.config.decisions_dir / fname).write_bytes(content)
+            # 3. 清理本轮归档生成的多余文件
+            for archive_target, _ in archived_moves:
+                if archive_target.exists():
+                    try:
+                        archive_target.unlink()
+                    except OSError:
+                        pass
+            raise
+        finally:
+            if db_backup.exists():
+                try:
+                    db_backup.unlink()
+                except OSError:
+                    pass
 
     def record_verification(
         self,

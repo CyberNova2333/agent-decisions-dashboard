@@ -379,7 +379,7 @@ def make_handler(server: DashboardServer):
                     self._send_json(500, {"error": "server_error", "message": str(e)})
                 return
 
-            # 3. 单议题针对性回滚 (P1-C)
+            # 3. 单议题针对性回滚 (P1-C, F02, F06, F08)
             elif path.startswith("/api/topic/") and path.endswith("/restore"):
                 raw_id = path.replace("/api/topic/", "").replace("/restore", "").strip()
                 rev_id = data.get("rev_id")
@@ -391,9 +391,24 @@ def make_handler(server: DashboardServer):
                         topic_id=raw_id,
                         rev_id=int(rev_id),
                         author=data.get("author", "用户/前端"),
-                        reason=data.get("reason", "")
+                        reason=data.get("reason", ""),
+                        expected_version=expected_ver,
+                        request_id=request_id
                     )
                     self._send_json(200, res)
+                except VersionConflictError as e:
+                    current_data = server.db.get_topic(e.topic_id)
+                    self._send_json(409, {
+                        "error": "version_conflict",
+                        "message": str(e),
+                        "current_version": e.current_version,
+                        "expected_version": e.expected_version,
+                        "current_topic": current_data
+                    })
+                except IdempotencyConflictError as e:
+                    self._send_json(409, {"error": "idempotency_conflict", "message": str(e)})
+                except TopicValidationError as e:
+                    self._send_json(400, {"error": "validation_error", "message": str(e)})
                 except Exception as e:
                     self._send_json(500, {"error": "restore_failed", "message": str(e)})
                 return
