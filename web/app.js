@@ -839,17 +839,23 @@
           document.getElementById("modal-edit-decision").classList.remove("active");
         }
         const savedTopicId = session.topicId;
+        const priorRevId = result.prior_rev_id;
+        const targetExpectedVersion = result.new_version;
         const undoAction = {
           text: "撤销这次提交",
           onClick: async () => {
             state.selectedTopicId = savedTopicId;
             try {
-              const logRes = await fetch(`/api/git/log?topic_id=${encodeURIComponent(savedTopicId)}&limit=5`);
-              if (logRes.ok) {
-                const logData = await logRes.json();
-                const revs = logData.revisions || [];
-                if (revs.length > 1) {
-                  await restoreSingleTopic(savedTopicId, revs[1].rev_id, true);
+              if (priorRevId != null) {
+                await restoreSingleTopic(savedTopicId, priorRevId, true, targetExpectedVersion);
+              } else {
+                const logRes = await fetch(`/api/git/log?topic_id=${encodeURIComponent(savedTopicId)}&limit=5`);
+                if (logRes.ok) {
+                  const logData = await logRes.json();
+                  const revs = logData.revisions || [];
+                  if (revs.length > 1) {
+                    await restoreSingleTopic(savedTopicId, revs[1].rev_id, true, targetExpectedVersion);
+                  }
                 }
               }
             } catch (err) {
@@ -1036,7 +1042,7 @@
   }
 
   // P1-C: 单议题针对性回滚
-  async function restoreSingleTopic(topicId, revId, keepDrawerOpen = false) {
+  async function restoreSingleTopic(topicId, revId, keepDrawerOpen = false, forcedExpectedVersion = null) {
     if (!Number.isSafeInteger(Number(revId)) || Number(revId) < 1) return;
     if (state.isRestoring) {
       showToast("已有恢复任务正在处理中，请勿重复操作", "warning");
@@ -1052,11 +1058,22 @@
         showToast("无法获取当前议题版本，已终止恢复以防数据覆盖", "error");
         return;
       }
-      const expectedVersion = currentTopic ? currentTopic.version : undefined;
-      if (!state.pendingRestores[restoreKey]) {
-        state.pendingRestores[restoreKey] = "restore-" + (window.crypto?.randomUUID?.() || (Date.now() + "-" + Math.random().toString(36).slice(2)));
+      let expectedVersion;
+      if (forcedExpectedVersion !== null && forcedExpectedVersion !== undefined) {
+        expectedVersion = forcedExpectedVersion;
+      } else {
+        expectedVersion = currentTopic ? currentTopic.version : undefined;
       }
-      const requestId = state.pendingRestores[restoreKey];
+
+      if (!state.pendingRestores[restoreKey]) {
+        state.pendingRestores[restoreKey] = {
+          requestId: "restore-" + (window.crypto?.randomUUID?.() || (Date.now() + "-" + Math.random().toString(36).slice(2))),
+          expectedVersion: expectedVersion,
+        };
+      }
+      const pending = state.pendingRestores[restoreKey];
+      const requestId = typeof pending === "object" ? pending.requestId : pending;
+      const effectiveExpectedVersion = (typeof pending === "object" && pending.expectedVersion !== undefined) ? pending.expectedVersion : expectedVersion;
 
       const res = await fetch(`${topicPath(topicId)}/restore`, {
         method: "POST",
@@ -1064,11 +1081,11 @@
         body: JSON.stringify({
           rev_id: revId,
           reason: "用户在看板中执行单议题精准回溯",
-          expected_version: expectedVersion,
+          expected_version: effectiveExpectedVersion,
           request_id: requestId,
         }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
         delete state.pendingRestores[restoreKey];
         if (!keepDrawerOpen) {
@@ -1082,15 +1099,20 @@
           showToast(`⏪ 议题 [${topicId}] 已成功精准回滚至快照 ${data.restored_from}！`);
         }
       } else {
-        delete state.pendingRestores[restoreKey];
+        if (res.status < 500) {
+          delete state.pendingRestores[restoreKey];
+        }
         if (!keepDrawerOpen) {
           closeDrawer("drawer-time-machine");
         }
         delete state.topicsDetailCache[topicId];
         await loadMetadataList();
-        showToast(`单议题回滚失败: ${data.message || data.error}`, "error");
+        showToast(`单议题回滚失败: ${data.message || data.error || ("HTTP " + res.status)}`, "error");
       }
     } catch (e) {
+      if (!keepDrawerOpen) {
+        closeDrawer("drawer-time-machine");
+      }
       showToast(`请求异常: ${e.message}`, "error");
     } finally {
       state.isRestoring = false;
