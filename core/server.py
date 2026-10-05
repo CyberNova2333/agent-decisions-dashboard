@@ -395,6 +395,8 @@ def make_handler(server: DashboardServer):
                     self._send_json(200, res)
                 except TopicValidationError as e:
                     self._send_json(400, {"error": "validation_error", "message": str(e)})
+                except IdempotencyConflictError as e:
+                    self._send_json(409, {"error": "idempotency_conflict", "message": str(e)})
                 except Exception as e:
                     self._send_json(500, {"error": "server_error", "message": str(e)})
                 return
