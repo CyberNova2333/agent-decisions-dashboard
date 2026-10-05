@@ -312,5 +312,62 @@ workflow_state: "decided"
         self.assertIn("坚持本地存储", parsed["rounds"][0]["user_opinion"])
         self.assertIn("落实为 SQLite", parsed["rounds"][0]["agent_reply"])
 
+    def test_superseded_and_deferred_excluded_from_active_decisions(self):
+        """测试被替代 (superseded) 或已暂缓 (deferred) 决策绝不作为必须遵守约束导出 (R09)"""
+        from core.decision_service import TopicValidationError
+        self.service.save_topic(
+            topic_id="adr-superseded",
+            data={
+                "title": "已作废旧方案",
+                "workflow_state": "decided",
+                "decision_outcome": "superseded",
+                "superseded_by": "adr-new",
+                "object": "网关"
+            }
+        )
+        self.service.save_topic(
+            topic_id="adr-deferred",
+            data={
+                "title": "暂缓执行方案",
+                "workflow_state": "decided",
+                "decision_outcome": "deferred",
+                "object": "网关"
+            }
+        )
+        ctx = self.agent.query_context(module="网关")
+        active_ids = [t["id"] for t in ctx["active_decisions"]]
+        self.assertNotIn("adr-superseded", active_ids)
+        self.assertNotIn("adr-deferred", active_ids)
+
+    def test_implemented_unverified_in_pending_requirements(self):
+        """测试已实现但尚未核验 (implemented) 的议题进入待落实/待核验清单 (R09)"""
+        self.service.save_topic(
+            topic_id="adr-impl-unverified",
+            data={
+                "title": "待核验实现",
+                "workflow_state": "decided",
+                "decision_outcome": "accepted",
+                "implementation_state": "implemented",
+                "object": "业务"
+            }
+        )
+        ctx = self.agent.query_context(module="业务")
+        pending_ids = [t["id"] for t in ctx["pending_requirements"]]
+        self.assertIn("adr-impl-unverified", pending_ids)
+
+    def test_rejected_requires_rejection_reason_backend(self):
+        """测试后端拒绝无理由的否决状态 (R09)"""
+        from core.decision_service import TopicValidationError
+        with self.assertRaises(TopicValidationError):
+            self.service.save_topic(
+                topic_id="adr-no-reason",
+                data={
+                    "title": "无理由否决",
+                    "workflow_state": "decided",
+                    "decision_outcome": "rejected",
+                    "rejection_reason": ""  # 空理由，后端必须拒绝
+                }
+            )
+
 if __name__ == "__main__":
     unittest.main()

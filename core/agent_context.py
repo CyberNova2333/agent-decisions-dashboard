@@ -88,9 +88,14 @@ class AgentContextEngine:
                 item["rejection_reason"] = t.get("rejection_reason", "未记录具体否决原因")
                 item["superseded_by"] = t.get("superseded_by", "")
                 rejected_proposals.append(item)
-            elif wf == "decided":
+            elif outcome in ["superseded", "deferred"]:
+                # 被替代或已暂缓的议题绝不进入“当前有效决策 (必须遵守)” (R09)
+                pass
+            elif wf == "decided" and outcome in ["accepted", ""]:
+                # 只有明确采纳的已定决策才属于强制遵守红线
                 active_decisions.append(item)
-                if impl in ["not_started", "in_progress"]:
+                # 若尚未核验 (包括已实现但待核验 implemented)，进入待落实与待核验清单 (R09)
+                if impl in ["not_started", "in_progress", "implemented"]:
                     pending_requirements.append(item)
             else:
                 pending_requirements.append(item)
