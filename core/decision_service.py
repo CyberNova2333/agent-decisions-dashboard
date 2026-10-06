@@ -29,6 +29,13 @@ class IdempotencyConflictError(Exception):
     """幂等键冲突异常"""
     pass
 
+def _diff_matches_field(diff_summary: Optional[str], key: str, val: Any) -> bool:
+    """精确匹配 diff_summary 中的键值对，防止子串包含导致的跨操作审计冲突 (J01, R1)"""
+    if not diff_summary or val is None:
+        return False
+    pattern = rf'(?:^|[\s,;]){re.escape(str(key))}={re.escape(str(val))}(?:[\s,;]|$)'
+    return bool(re.search(pattern, diff_summary))
+
 class DecisionService:
     def __init__(self, config: Config):
         self.config = config
@@ -129,6 +136,7 @@ class DecisionService:
         max_seq = self.db.get_topic_max_version(topic_id)
         initial_version = (max_seq + 1) if max_seq > 0 else 1
 
+        effective_expected = expected_version
         if cached_prep is not None:
             prep_allocated_ver = cached_prep.get("allocated_version")
             if (
@@ -187,10 +195,12 @@ class DecisionService:
                     disk_ver = parsed_disk.get("version", 1)
                     if is_interrupted_prior_attempt:
                         # 属于同一请求的中断续做：如果磁盘版本等于预分配版本或预期版本，均视为合法
-                        if disk_ver not in (allocated_version, expected_version):
+                        valid_disk_vers = {allocated_version, expected_version, effective_expected}
+                        valid_disk_vers.discard(None)
+                        if disk_ver not in valid_disk_vers:
                             raise VersionConflictError(
                                 current_version=disk_ver,
-                                expected_version=expected_version,
+                                expected_version=effective_expected if effective_expected is not None else expected_version,
                                 topic_id=topic_id
                             )
                     else:
@@ -279,7 +289,7 @@ class DecisionService:
 
         if not cached_prep:
             # 外部 Markdown 改动检测：若在本次保存前磁盘轮次已被直接编辑，先将该真实前态导入为独立基线 (F10, G02)
-            if existing_row and existing_doc and current_rounds:
+            if existing_row and existing_doc:
                 disk_disc = []
                 for r in current_rounds:
                     rnd = r.get("round", len(disk_disc) + 1)
@@ -476,7 +486,7 @@ class DecisionService:
         existing_rev = None
         if request_id:
             rev_list = self.db.get_revisions(limit=10, topic_id=topic_id)
-            existing_rev = next((r for r in rev_list if f"request_id={request_id}" in (r.get("diff_summary") or "")), None)
+            existing_rev = next((r for r in rev_list if _diff_matches_field(r.get("diff_summary"), "request_id", request_id)), None)
 
         if existing_rev:
             rev_info = {"rev_id": existing_rev["rev_id"], "rev_hash": existing_rev["rev_hash"]}
@@ -805,13 +815,13 @@ class DecisionService:
 
             rev_list = self.db.get_revisions(limit=20, topic_id=topic_id)
             has_restore_rev = any(
-                r.get("action_type") == "TOPIC_RESTORE" and f"request_id={request_id}" in (r.get("diff_summary") or "")
+                r.get("action_type") == "TOPIC_RESTORE" and _diff_matches_field(r.get("diff_summary"), "request_id", request_id)
                 for r in rev_list
             )
             conflict_rev = next(
                 (r for r in rev_list if r.get("action_type") == "TOPIC_RESTORE"
-                 and f"request_id={request_id}" in (r.get("diff_summary") or "")
-                 and f"rev_id={rev_id}" not in (r.get("diff_summary") or "")),
+                 and _diff_matches_field(r.get("diff_summary"), "request_id", request_id)
+                 and not _diff_matches_field(r.get("diff_summary"), "rev_id", rev_id)),
                 None
             )
             if conflict_rev:
@@ -827,7 +837,7 @@ class DecisionService:
                 )
                 latest_rev_hash = new_rev["rev_hash"]
             else:
-                matching_rev = next((r for r in rev_list if r.get("action_type") == "TOPIC_RESTORE" and f"request_id={request_id}" in (r.get("diff_summary") or "")), rev_list[0])
+                matching_rev = next((r for r in rev_list if r.get("action_type") == "TOPIC_RESTORE" and _diff_matches_field(r.get("diff_summary"), "request_id", request_id)), rev_list[0])
                 latest_rev_hash = matching_rev["rev_hash"]
 
             self.recovery.sync_metadata_json()
@@ -856,8 +866,8 @@ class DecisionService:
             rev_list = self.db.get_revisions(limit=20, topic_id=topic_id)
             undo_rev = next(
                 (r for r in rev_list if r.get("action_type") == "TOPIC_REMOVE"
-                 and f"undo_creation_of={topic_id}" in (r.get("diff_summary") or "")
-                 and (f"request_id={request_id}" in (r.get("diff_summary") or "") or f"rev_id={rev_id}" in (r.get("diff_summary") or ""))),
+                 and _diff_matches_field(r.get("diff_summary"), "undo_creation_of", topic_id)
+                 and (_diff_matches_field(r.get("diff_summary"), "request_id", request_id) or _diff_matches_field(r.get("diff_summary"), "rev_id", rev_id))),
                 None
             )
             is_prepared_undo = cached_res and cached_res.get("action") == "undo_creation"

@@ -119,18 +119,66 @@
   function applyConfig(cfg) {
     state.config = cfg;
     if (cfg.project_name) {
-      document.getElementById("page-title").innerText = cfg.project_name;
-      document.getElementById("brand-title").childNodes[0].nodeValue = cfg.project_name + " ";
+      const pageTitleEl = document.getElementById("page-title");
+      if (pageTitleEl) pageTitleEl.innerText = cfg.project_name;
+      const brandTitleEl = document.getElementById("brand-title");
+      if (brandTitleEl) {
+        const brandNameSpan = brandTitleEl.querySelector("[data-brand-name]");
+        if (brandNameSpan) {
+          brandNameSpan.innerText = cfg.project_name;
+        } else {
+          const brandIconEl = document.getElementById("brand-icon");
+          if (brandIconEl && brandIconEl.parentNode === brandTitleEl) {
+            let textNode = null;
+            for (const node of brandTitleEl.childNodes) {
+              if (node === brandIconEl) break;
+              if (node.nodeType === Node.TEXT_NODE) {
+                textNode = node;
+                break;
+              }
+            }
+            if (textNode) {
+              textNode.nodeValue = cfg.project_name + " ";
+            } else {
+              brandTitleEl.insertBefore(document.createTextNode(cfg.project_name + " "), brandIconEl);
+            }
+          } else {
+            brandTitleEl.innerText = cfg.project_name;
+          }
+        }
+      }
     }
     if (cfg.project_subtitle) {
-      document.getElementById("brand-subtitle").innerText = cfg.project_subtitle;
+      const el = document.getElementById("brand-subtitle");
+      if (el) el.innerText = cfg.project_subtitle;
     }
     if (cfg.brand_logo) {
-      document.getElementById("brand-logo").innerText = cfg.brand_logo;
+      const el = document.getElementById("brand-logo");
+      if (el) el.innerText = cfg.brand_logo;
     }
     if (cfg.brand_icon) {
       const iconUri = `data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>${encodeURIComponent(cfg.brand_icon)}</text></svg>`;
-      document.getElementById("page-favicon").href = iconUri;
+      const fav = document.getElementById("page-favicon");
+      if (fav) fav.href = iconUri;
+      const brandIconEl = document.getElementById("brand-icon");
+      if (brandIconEl) brandIconEl.innerText = cfg.brand_icon;
+    }
+
+    if (cfg.lifecycle_states && Array.isArray(cfg.lifecycle_states)) {
+      cfg.lifecycle_states.forEach((s) => {
+        const opt = document.querySelector(`#form-workflow-state option[value="${s.id}"]`);
+        if (opt) {
+          const label = s.name || s.id;
+          opt.innerText = (s.badge && !s.badge.includes(label)) ? `${s.badge} ${label}` : (s.badge || label);
+        }
+        const pill = document.querySelector(`[data-type="lifecycle"][data-val="${s.id}"]`);
+        if (pill) {
+          const span = pill.querySelector("span:first-child");
+          if (span) {
+            span.innerText = s.badge || s.name || s.id;
+          }
+        }
+      });
     }
 
     // Populate category filters
@@ -225,6 +273,21 @@
     return html;
   }
 
+  function getCanonicalOutcome(t) {
+    if (t.decision_outcome) {
+      return t.decision_outcome;
+    }
+    const status = String(t.decision_status || "");
+    if (status.includes("非否决")) return (t.workflow_state || t.lifecycle_status) === "decided" ? "accepted" : "";
+    if (status.includes("否决")) return "rejected";
+    if (status.includes("已定") || status.includes("采纳")) return "accepted";
+    if (status.includes("推迟") || status.includes("待定")) return "deferred";
+    if (status.includes("替代")) return "superseded";
+    const wf = t.workflow_state || t.lifecycle_status;
+    if (wf === "decided") return "accepted";
+    return "";
+  }
+
   function getFilteredTopics() {
     return state.topicsMeta.filter((t) => {
       const wf = t.workflow_state || t.lifecycle_status || "discussing";
@@ -235,11 +298,13 @@
         return false;
       }
       if (state.filters.outcome !== "all") {
-        const out = t.decision_outcome || "";
+        const canonicalOut = getCanonicalOutcome(t);
         if (state.filters.outcome === "rejected") {
-          if (out !== "rejected" && !((t.decision_status || "").includes("否决"))) return false;
+          if (canonicalOut !== "rejected") return false;
         } else if (state.filters.outcome === "accepted") {
-          if (out === "rejected" || ((t.decision_status || "").includes("否决"))) return false;
+          if (canonicalOut !== "accepted") return false;
+        } else {
+          if (canonicalOut !== state.filters.outcome) return false;
         }
       }
       if (state.filters.searchQuery) {
@@ -273,7 +338,8 @@
       return;
     }
 
-    container.className = `topic-grid ${state.viewMode === "list" ? "list-view" : ""}`;
+    container.classList.add("topic-grid");
+    container.classList.toggle("list-view", state.viewMode === "list");
 
     container.innerHTML = filtered
       .map((t) => {
@@ -282,7 +348,7 @@
         const rounds = t.rounds_count || 1;
         const ver = t.version || 1;
 
-        const isRejected = (t.decision_outcome === "rejected") || ((t.decision_status || "").includes("否决"));
+        const isRejected = (getCanonicalOutcome(t) === "rejected");
         const implState = t.implementation_state || t.impl_status || "not_started";
 
         // Implementation Badge
@@ -417,7 +483,7 @@
       else if (wf === "pending") pending++;
       else discussing++;
 
-      if (t.decision_outcome === "rejected" || (t.decision_status || "").includes("否决")) {
+      if (getCanonicalOutcome(t) === "rejected") {
         rejected++;
       }
 
@@ -482,10 +548,7 @@
 
   function valuesFromMeta(meta) {
     const workflow = meta.workflow_state || meta.lifecycle_status || "discussing";
-    const outcome = meta.decision_outcome ?? (
-      String(meta.decision_status || "").includes("否决") ? "rejected" :
-        workflow === "decided" ? "accepted" : ""
-    );
+    const outcome = getCanonicalOutcome(meta);
     return {
       workflow_state: workflow,
       decision_outcome: outcome,
@@ -534,12 +597,21 @@
   function updateEditControls(session) {
     if (state.editSession !== session) return;
     const button = document.getElementById("btn-submit-decision");
+    if (!button) return;
+    const isEn = document.documentElement.lang?.toLowerCase().startsWith("en");
+    if (!button.hasAttribute("data-default-text")) {
+      const initialText = button.textContent.trim();
+      button.setAttribute("data-default-text", initialText || (isEn ? "Save decision" : "确定决策并生成 Git Commit"));
+    }
+    const defaultText = button.getAttribute("data-default-text");
     button.disabled = Boolean(session.saving || session.conflict || !state.isServerOnline);
-    button.textContent = session.saving ? "正在确认并保存..." : session.conflict ? "请先核对并合并冲突" :
-      session.uncertain ? "重试原请求（核对保存结果）" : "确定决策并生成 Git Commit";
+    button.textContent = session.saving ? (isEn ? "Saving..." : "正在确认并保存...") :
+      session.conflict ? (isEn ? "Please resolve conflicts first" : "请先核对并合并冲突") :
+      session.uncertain ? (isEn ? "Retry original request" : "重试原请求（核对保存结果）") : defaultText;
     // An uncertain request can only be replayed byte-for-byte, not edited in place.
     for (const field of [...EDIT_FIELDS, ...DISCUSSION_FIELDS]) {
-      document.getElementById(field.id).disabled = Boolean(session.saving || session.conflict || session.uncertain);
+      const el = document.getElementById(field.id);
+      if (el) el.disabled = Boolean(session.saving || session.conflict || session.uncertain);
     }
   }
 
