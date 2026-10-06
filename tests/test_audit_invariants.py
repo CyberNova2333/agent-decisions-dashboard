@@ -448,6 +448,136 @@ with patch.object(s.db, 'commit_revision', side_effect=lambda **kw: os._exit(86)
 
         self.assertTrue(retry["status"] != 200 or retry["body"].get("new_version", 0) > winner["new_version"], "HTTP header path accepts R1 with reused v2 despite R2 already having v2")
 
+    def crash_restore(self, rev, ver, rid, t="a"):
+        repo_path = Path(__file__).resolve().parent.parent
+        code = """import sys, os
+from pathlib import Path
+from unittest.mock import patch
+sys.path.insert(0, sys.argv[1])
+from core.config import Config
+from core.decision_service import DecisionService
+s = DecisionService(Config({'git_commit': {'enabled': False}}, Path(sys.argv[2])))
+with patch.object(s.db, 'commit_revision', side_effect=lambda **kw: os._exit(86)):
+    s.restore_single_topic(sys.argv[6], int(sys.argv[3]), expected_version=int(sys.argv[4]), request_id=sys.argv[5])
+"""
+        cp = subprocess.run([sys.executable, "-c", code, str(repo_path), str(self.root), str(rev), str(ver), rid, t], capture_output=True, text=True, timeout=10)
+        self.assertEqual(cp.returncode, 86, "Must reach process exit injection: " + cp.stderr)
+        self.s = DashboardServer(self.cfg, web_dir=repo_path / "web").service
+
+    def test_F01_save_retry_keeps_original_undo_before_state(self):
+        self.save(content_override="Correct baseline")
+        prior = self.rev()
+        data = self.data(content_override="Mistaken change", new_user_opinion="Mistake")
+        original = self.s.db.record_idempotency
+
+        def fail_applied(*args, **kw):
+            if kw.get("status") == "applied":
+                raise OSError("injected one applied-result record failure after Revision")
+            return original(*args, **kw)
+
+        with patch.object(self.s.db, "record_idempotency", side_effect=fail_applied):
+            first = self.error(lambda: self.s.save_topic("a", data, expected_version=1, request_id="save-undo"))
+        retry = self.error(lambda: self.s.save_topic("a", data, expected_version=1, request_id="save-undo"))
+        result = retry.get("result", {})
+        undo = self.error(lambda: self.s.restore_single_topic("a", result["prior_rev_id"], expected_version=result["new_version"], request_id="undo-fixed-target")) if result else {}
+        self.assertEqual(self.s.db.get_topic("a")["content"], "Correct baseline")
+
+    def test_F02_exact_optional_version_save_retry_remains_valid(self):
+        self.save()
+        body = self.data(content_override="New body")
+        args = {"expected_version": None, "request_id": "optional-version"}
+        with patch.object(self.s.db, "upsert_topic", side_effect=sqlite3.OperationalError("injected after file replaced, before DB update")):
+            first = self.error(lambda: self.s.save_topic("a", body, **args))
+        retry = self.error(lambda: self.s.save_topic("a", body, **args))
+        self.assertNotIn("exception", retry)
+
+    def test_F03_prior_different_restore_must_not_poison_crash_resume(self):
+        self.save(content_override="Version one")
+        target1 = self.rev()
+        self.save(content_override="Version two")
+        target2 = self.rev()
+        self.s.restore_single_topic("a", target1, expected_version=2, request_id="old-operation")
+        self.save(content_override="Version four")
+        self.crash_restore(target2, 4, "new-operation")
+        retry = self.error(lambda: self.s.restore_single_topic("a", target2, expected_version=4, request_id="new-operation"))
+        self.assertNotIn("exception", retry)
+
+    def test_F04_old_same_target_restore_is_not_current_operation_audit(self):
+        self.save(content_override="Version one")
+        target = self.rev()
+        self.save(content_override="Version two")
+        self.s.restore_single_topic("a", target, expected_version=2, request_id="first-restore")
+        self.save(content_override="Version four")
+        n_before = sum(r["action_type"] == "TOPIC_RESTORE" for r in self.s.db.get_revisions(1000))
+        self.crash_restore(target, 4, "second-restore")
+        retry = self.error(lambda: self.s.restore_single_topic("a", target, expected_version=4, request_id="second-restore"))
+        n_after = sum(r["action_type"] == "TOPIC_RESTORE" for r in self.s.db.get_revisions(1000))
+        self.assertEqual(n_after, n_before + 1)
+
+    def test_F05_crashed_undo_creation_can_finish_after_delete(self):
+        self.save("b", title="B")
+        target = self.rev()
+        self.save(title="Accidental A")
+        self.crash_restore(target, 1, "delete-crash")
+        retry = self.error(lambda: self.s.restore_single_topic("a", target, expected_version=1, request_id="delete-crash"))
+        self.assertNotIn("exception", retry)
+
+    def test_F06_failed_conditional_delete_preserves_winner_content(self):
+        self.save("b")
+        target = self.rev()
+        self.save(title="Old A v1")
+        real = self.s.db.get_revision_by_id
+        once = False
+        winner = {}
+
+        def lookup(r):
+            nonlocal once
+            if not once:
+                once = True
+                winner.update(self.save(title="Winner A v2", content_override="Must survive"))
+            return real(r)
+
+        with patch.object(self.s.db, "get_revision_by_id", side_effect=lookup):
+            response = self.error(lambda: self.s.restore_single_topic("a", target, expected_version=1, request_id="delete-race"))
+        self.assertEqual(self.s.db.get_topic("a")["title"], "Winner A v2")
+
+    def test_F07_same_title_cannot_alias_restore_target_after_crash(self):
+        self.save(content_override="Body one")
+        target1 = self.rev()
+        self.save(content_override="Body two")
+        target2 = self.rev()
+        self.crash_restore(target1, 2, "same-key")
+        retry = self.error(lambda: self.s.restore_single_topic("a", target2, expected_version=2, request_id="same-key"))
+        self.assertIn("exception", retry)
+
+    def test_F08_control_fixed_undo_target_survives_later_edit(self):
+        self.save(content_override="Before")
+        res = self.s.save_topic("a", self.data(content_override="Mistake"), expected_version=1, request_id="saved")
+        self.save(content_override="Later valid edit")
+        before = self.state()
+        undo = self.error(lambda: self.s.restore_single_topic("a", res["prior_rev_id"], expected_version=res["new_version"], request_id="undo"))
+        self.assertEqual(self.state(), before)
+
+    def test_F09_control_exact_restore_retry_after_export_failure(self):
+        self.save(content_override="Before")
+        target = self.rev()
+        self.save(content_override="Mistake")
+        args = {"expected_version": 2, "request_id": "restore-export"}
+        with patch.object(self.s.recovery, "sync_metadata_json", side_effect=OSError("injected export failure")):
+            first = self.error(lambda: self.s.restore_single_topic("a", target, **args))
+        mid = self.s.db.get_topic("a")
+        retry = self.error(lambda: self.s.restore_single_topic("a", target, **args))
+        self.assertNotIn("exception", retry)
+        self.assertEqual(self.s.db.get_topic("a")["version"], mid["version"])
+
+    def test_F10_undo_preserves_authoritative_discussion_before_save(self):
+        self.save(new_user_opinion="Original discussion")
+        doc = self.doc()
+        doc.write_text(doc.read_text(encoding="utf-8").replace("Original discussion", "Corrected authoritative discussion"), encoding="utf-8")
+        res = self.s.save_topic("a", self.data(new_user_opinion="Mistaken addition"), expected_version=1, request_id="after-external-edit")
+        undo = self.error(lambda: self.s.restore_single_topic("a", res["prior_rev_id"], expected_version=res["new_version"], request_id="undo-external"))
+        self.assertIn("Corrected authoritative discussion", doc.read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()
