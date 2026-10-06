@@ -491,7 +491,7 @@
 
   function updateSidebarCounts() {
     let decided = 0, discussing = 0, pending = 0, rejected = 0;
-    const objCounts = {};
+    const objCounts = Object.create(null);
 
     state.topicsMeta.forEach((t) => {
       const wf = t.workflow_state || t.lifecycle_status || "discussing";
@@ -515,6 +515,9 @@
     
     const rejEl = document.getElementById("pill-count-rejected");
     if (rejEl) rejEl.innerText = rejected;
+    document.querySelectorAll("[data-obj-badge]").forEach((badge) => {
+      badge.textContent = String(objCounts[badge.dataset.objBadge] || 0);
+    });
 
     document.getElementById("count-settled").innerText = state.settledDecisions.length;
     document.getElementById("count-open").innerText = state.openQuestions.length;
