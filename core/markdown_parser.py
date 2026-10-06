@@ -238,7 +238,7 @@ class TopicMarkdownParser:
                 continue
 
             stripped_line = line.strip()
-            if stripped_line.startswith("## 历史讨论与决策记录") or stripped_line.lower().startswith("## discussion history"):
+            if re.match(r"^##\s+(?:历史讨论与决策记录|discussion\s+history(?:\s*(?:and|&)\s*decisions?)?)\s*$", stripped_line, re.IGNORECASE):
                 split_idx = i
                 break
 
@@ -417,9 +417,9 @@ class TopicMarkdownParser:
                 continue
 
             # 围栏之外检测字段标头
-            user_m = re.match(r"^-\s+\*\*.*?(?:用户|user(?:\s*opinion)?).*?\*\*[：:]?[ \t]*(.*)", line, re.IGNORECASE)
-            agent_m = re.match(r"^-\s+\*\*.*?(?:答复|落实|agent(?:\s*reply)?).*?\*\*[：:]?[ \t]*(.*)", line, re.IGNORECASE)
-            commit_m = re.match(r"^-\s+\*\*.*?(?:变更说明|change(?:\s*summary)?).*?\*\*[：:]?[ \t]*(.*)", line, re.IGNORECASE)
+            user_m = re.match(r"^-\s+\*\*.*?(?:用户(?:意见)?|user\s*opinion).*?\*\*[：:]?[ \t]*(.*)", line, re.IGNORECASE)
+            agent_m = re.match(r"^-\s+\*\*.*?(?:答复|落实|agent\s*reply|team\s*reply).*?\*\*[：:]?[ \t]*(.*)", line, re.IGNORECASE)
+            commit_m = re.match(r"^-\s+\*\*.*?(?:变更说明|change\s*summary).*?\*\*[：:]?[ \t]*(.*)", line, re.IGNORECASE)
 
             if user_m:
                 current_target = "user"

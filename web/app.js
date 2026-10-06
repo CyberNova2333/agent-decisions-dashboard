@@ -148,7 +148,7 @@
         }
       }
     }
-    if (cfg.project_subtitle) {
+    if (cfg.project_subtitle !== undefined && cfg.project_subtitle !== null) {
       const el = document.getElementById("brand-subtitle");
       if (el) el.innerText = cfg.project_subtitle;
     }
@@ -585,13 +585,79 @@
 
   function updateModalInfo(session) {
     const meta = session.base;
-    document.getElementById("modal-edit-title").textContent = `确定决策: ${meta.title}`;
-    document.getElementById("modal-topic-id").textContent = `#${session.topicId}`;
-    document.getElementById("modal-topic-version").textContent = `v${meta.version ?? "未知"}`;
-    document.getElementById("modal-topic-category").textContent = `${meta.object || "通用"} · ${meta.function || "规范"}`;
+    const isEn = document.documentElement.lang?.toLowerCase().startsWith("en");
+    const titleEl = document.getElementById("modal-edit-title");
+    if (titleEl) {
+      if (!titleEl.hasAttribute("data-default-title")) {
+        titleEl.setAttribute("data-default-title", titleEl.textContent.trim());
+      }
+      const defaultTitle = titleEl.getAttribute("data-default-title");
+      if (isEn || !defaultTitle.includes("确定决策")) {
+        titleEl.textContent = `${defaultTitle}: ${meta.title}`;
+      } else {
+        titleEl.textContent = `确定决策: ${meta.title}`;
+      }
+    }
+    const topicIdEl = document.getElementById("modal-topic-id");
+    if (topicIdEl) topicIdEl.textContent = `#${session.topicId}`;
+    const topicVerEl = document.getElementById("modal-topic-version");
+    if (topicVerEl) topicVerEl.textContent = `v${meta.version ?? "未知"}`;
+    const topicCatEl = document.getElementById("modal-topic-category");
+    if (topicCatEl) topicCatEl.textContent = `${meta.object || "通用"} · ${meta.function || "规范"}`;
+
     const nextRound = (Number(meta.rounds_count) || 0) + 1;
-    document.getElementById("form-user-opinion").placeholder = `输入第 ${nextRound} 轮的用户意见指示原话...`;
-    document.getElementById("form-agent-reply").placeholder = `输入第 ${nextRound} 轮的落实说明与排期...`;
+    const userOpEl = document.getElementById("form-user-opinion");
+    if (userOpEl) {
+      if (!userOpEl.hasAttribute("data-default-placeholder")) {
+        userOpEl.setAttribute("data-default-placeholder", userOpEl.placeholder || "");
+      }
+      const origPlaceholder = userOpEl.getAttribute("data-default-placeholder");
+      if (origPlaceholder && origPlaceholder !== "录入用户明确意见或指示原话...") {
+        userOpEl.placeholder = origPlaceholder;
+      } else if (isEn) {
+        userOpEl.placeholder = `Enter round ${nextRound} user requirements...`;
+      } else {
+        userOpEl.placeholder = `输入第 ${nextRound} 轮的用户意见指示原话...`;
+      }
+    }
+    const agentRepEl = document.getElementById("form-agent-reply");
+    if (agentRepEl) {
+      if (!agentRepEl.hasAttribute("data-default-placeholder")) {
+        agentRepEl.setAttribute("data-default-placeholder", agentRepEl.placeholder || "");
+      }
+      const origPlaceholder = agentRepEl.getAttribute("data-default-placeholder");
+      if (origPlaceholder && origPlaceholder !== "输入第 n 轮的落实说明与排期...") {
+        agentRepEl.placeholder = origPlaceholder;
+      } else if (isEn) {
+        agentRepEl.placeholder = `Enter round ${nextRound} agent reply and schedule...`;
+      } else {
+        agentRepEl.placeholder = `输入第 ${nextRound} 轮的落实说明与排期...`;
+      }
+    }
+  }
+
+  function updateButtonLabel(button, text) {
+    const labelSpan = button.querySelector("[data-save-label]");
+    if (labelSpan) {
+      labelSpan.textContent = text;
+      return;
+    }
+    const iconSpan = button.querySelector("[data-save-icon]");
+    if (iconSpan) {
+      let foundText = false;
+      for (const child of button.childNodes) {
+        if (child !== iconSpan && child.nodeType === Node.TEXT_NODE) {
+          child.nodeValue = " " + text;
+          foundText = true;
+          break;
+        }
+      }
+      if (!foundText) {
+        button.appendChild(document.createTextNode(" " + text));
+      }
+      return;
+    }
+    button.textContent = text;
   }
 
   function updateEditControls(session) {
@@ -600,14 +666,16 @@
     if (!button) return;
     const isEn = document.documentElement.lang?.toLowerCase().startsWith("en");
     if (!button.hasAttribute("data-default-text")) {
-      const initialText = button.textContent.trim();
+      const labelEl = button.querySelector("[data-save-label]");
+      const initialText = labelEl ? labelEl.textContent.trim() : button.textContent.trim();
       button.setAttribute("data-default-text", initialText || (isEn ? "Save decision" : "确定决策并生成 Git Commit"));
     }
     const defaultText = button.getAttribute("data-default-text");
     button.disabled = Boolean(session.saving || session.conflict || !state.isServerOnline);
-    button.textContent = session.saving ? (isEn ? "Saving..." : "正在确认并保存...") :
+    const text = session.saving ? (isEn ? "Saving..." : "正在确认并保存...") :
       session.conflict ? (isEn ? "Please resolve conflicts first" : "请先核对并合并冲突") :
       session.uncertain ? (isEn ? "Retry original request" : "重试原请求（核对保存结果）") : defaultText;
+    updateButtonLabel(button, text);
     // An uncertain request can only be replayed byte-for-byte, not edited in place.
     for (const field of [...EDIT_FIELDS, ...DISCUSSION_FIELDS]) {
       const el = document.getElementById(field.id);
@@ -1158,10 +1226,8 @@
         }),
       });
       const data = await res.json().catch(() => ({}));
-      if (res.ok) {
-        if (data && data.restored_from) {
-          delete state.pendingRestores[restoreKey];
-        }
+      if (res.ok && data && data.restored_from) {
+        delete state.pendingRestores[restoreKey];
         if (!keepDrawerOpen) {
           closeDrawer("drawer-time-machine");
         }
@@ -1172,6 +1238,13 @@
         } else {
           showToast(`⏪ 议题 [${topicId}] 已成功精准回滚至快照 ${data.restored_from}！`);
         }
+      } else if (res.ok) {
+        if (!keepDrawerOpen) {
+          closeDrawer("drawer-time-machine");
+        }
+        delete state.topicsDetailCache[topicId];
+        await loadMetadataList();
+        showToast(`⚠️ 议题 [${topicId}] 回滚响应异常 (快照 undefined)，请重试原请求`, "warning");
       } else {
         if (res.status < 500) {
           delete state.pendingRestores[restoreKey];

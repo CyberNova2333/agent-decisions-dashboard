@@ -29,12 +29,35 @@ class IdempotencyConflictError(Exception):
     """幂等键冲突异常"""
     pass
 
+def _parse_diff_fields(diff_summary: Optional[str]) -> Dict[str, str]:
+    if not diff_summary:
+        return {}
+    text = diff_summary
+    reason = None
+    if ", reason=" in text:
+        text, reason = text.split(", reason=", 1)
+    elif text.startswith("reason="):
+        return {"reason": text[7:]}
+
+    fields: Dict[str, str] = {}
+    if reason is not None:
+        fields["reason"] = reason
+
+    for part in text.split(","):
+        part = part.strip()
+        if "=" in part:
+            k, v = part.split("=", 1)
+            fields[k.strip()] = v.strip()
+        elif part.startswith("v") and part[1:].isdigit():
+            fields["version"] = part[1:]
+    return fields
+
 def _diff_matches_field(diff_summary: Optional[str], key: str, val: Any) -> bool:
-    """精确匹配 diff_summary 中的键值对，防止子串包含导致的跨操作审计冲突 (J01, R1)"""
+    """精确匹配 diff_summary 中的键值对，防止子串包含或 reason 自由文本导致的跨操作审计冲突 (K04, K05)"""
     if not diff_summary or val is None:
         return False
-    pattern = rf'(?:^|[\s,;]){re.escape(str(key))}={re.escape(str(val))}(?:[\s,;]|$)'
-    return bool(re.search(pattern, diff_summary))
+    fields = _parse_diff_fields(diff_summary)
+    return str(fields.get(key, "")) == str(val)
 
 class DecisionService:
     def __init__(self, config: Config):
@@ -474,19 +497,23 @@ class DecisionService:
         else:
             new_version = allocated_version
 
-        if commit_msg:
+        # 7. 提交 Revision 快照（若本请求在先前尝试中已生成快照，复用既有快照，避免重复生成历史） (F01, R10)
+        existing_rev = None
+        if request_id:
+            rev_list = self.db.get_revisions(limit=20, topic_id=topic_id)
+            for r in rev_list:
+                if r.get("action_type") in ("RECORD_DECISION", "NEW_TOPIC"):
+                    if _diff_matches_field(r.get("diff_summary"), "request_id", request_id):
+                        existing_rev = r
+                        break
+
+        if commit_msg and not db_already_updated and not existing_rev:
             basis_str = f"用户指示: {user_opinion[:25]}..." if user_opinion else "用户明确决策"
             self.db.record_changelog(
                 scope=f"[{title}](#{topic_id})",
                 change=f"{commit_msg} [{lifecycle_badge}]",
                 basis=basis_str
             )
-
-        # 7. 提交 Revision 快照（若本请求在先前尝试中已生成快照，复用既有快照，避免重复生成历史） (F01, R10)
-        existing_rev = None
-        if request_id:
-            rev_list = self.db.get_revisions(limit=10, topic_id=topic_id)
-            existing_rev = next((r for r in rev_list if _diff_matches_field(r.get("diff_summary"), "request_id", request_id)), None)
 
         if existing_rev:
             rev_info = {"rev_id": existing_rev["rev_id"], "rev_hash": existing_rev["rev_hash"]}
