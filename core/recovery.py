@@ -24,34 +24,35 @@ class RecoveryManager:
 
     @staticmethod
     def _compute_digest(data: Dict[str, Any], core_content: str, rounds: List[Dict[str, Any]]) -> str:
-        """计算议题内容的规范化 SHA-256 摘要，用于精准检测内容漂移"""
-        rounds_str_parts = []
+        """计算议题内容的规范化 SHA-256 摘要，用于精准检测内容漂移 (T09)"""
+        rounds_canonical = []
         for r in rounds:
             # 对称比较业务语义字段，不引入展示层标题时间戳与原始 Markdown 差异 (F06)
-            u = str(r.get("user_opinion") or "").strip()
-            a = str(r.get("agent_reply") or "").strip()
-            c = str(r.get("commit_message") or "").strip()
-            rounds_str_parts.append(f"{u}:{a}:{c}")
-        rounds_str = "||".join(rounds_str_parts)
+            rounds_canonical.append({
+                "u": str(r.get("user_opinion") or "").strip(),
+                "a": str(r.get("agent_reply") or "").strip(),
+                "c": str(r.get("commit_message") or "").strip()
+            })
+        rounds_json = json.dumps(rounds_canonical, ensure_ascii=False, sort_keys=True)
 
-        fields = [
-            str(data.get("id", "")).strip(),
-            str(data.get("title", "")).strip(),
-            str(data.get("section", "")).strip(),
-            str(data.get("object", "")).strip(),
-            str(data.get("function", "")).strip(),
-            str(data.get("workflow_state", "")).strip(),
-            str(data.get("decision_outcome", "")).strip(),
-            str(data.get("rejection_reason", "")).strip(),
-            str(data.get("superseded_by", "")).strip(),
-            str(data.get("implementation_state", "")).strip(),
-            str(data.get("impl_commit", "")).strip(),
-            str(data.get("impl_verifier", "")).strip(),
-            str(data.get("version", 1)),
-            core_content.strip(),
-            rounds_str
-        ]
-        return hashlib.sha256("|".join(fields).encode("utf-8")).hexdigest()
+        canonical_obj = {
+            "id": str(data.get("id", "")).strip(),
+            "title": str(data.get("title", "")).strip(),
+            "section": str(data.get("section", "")).strip(),
+            "object": str(data.get("object", "")).strip(),
+            "function": str(data.get("function", "")).strip(),
+            "workflow_state": str(data.get("workflow_state", "")).strip(),
+            "decision_outcome": str(data.get("decision_outcome", "")).strip(),
+            "rejection_reason": str(data.get("rejection_reason", "")).strip(),
+            "superseded_by": str(data.get("superseded_by", "")).strip(),
+            "implementation_state": str(data.get("implementation_state", "")).strip(),
+            "impl_commit": str(data.get("impl_commit", "")).strip(),
+            "impl_verifier": str(data.get("impl_verifier", "")).strip(),
+            "version": int(data.get("version") or 1),
+            "content": core_content.strip(),
+            "rounds": rounds_json
+        }
+        return hashlib.sha256(json.dumps(canonical_obj, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
     def check_consistency(self) -> Dict[str, Any]:
         """
@@ -167,15 +168,26 @@ class RecoveryManager:
                             meta_synced = False
                             break
                         dbt = db_topics[mid]
-                        # 全量比对关键业务字段 (F10)
-                        if mt.get("title") != dbt.get("title") or \
-                           mt.get("version") != dbt.get("version") or \
-                           mt.get("workflow_state") != (dbt.get("workflow_state") or dbt.get("lifecycle_status")) or \
-                           mt.get("decision_outcome") != dbt.get("decision_outcome") or \
-                           mt.get("implementation_state") != dbt.get("implementation_state") or \
-                           mt.get("priority") != dbt.get("priority") or \
-                           mt.get("section") != dbt.get("section"):
-                            meta_synced = False
+                        # 全量比对业务字段 (F10, T10)
+                        fields_to_compare = [
+                            "title", "version", "section", "object", "function",
+                            "workflow_state", "decision_outcome", "rejection_reason",
+                            "superseded_by", "implementation_state", "impl_commit",
+                            "impl_verifier", "priority"
+                        ]
+                        for fld in fields_to_compare:
+                            m_val = mt.get(fld, "")
+                            if fld == "workflow_state":
+                                db_val = dbt.get("workflow_state") or dbt.get("lifecycle_status", "")
+                            elif fld == "version":
+                                m_val = int(m_val or 1)
+                                db_val = int(dbt.get("version") or 1)
+                            else:
+                                db_val = dbt.get(fld, "")
+                            if str(m_val).strip() != str(db_val).strip():
+                                meta_synced = False
+                                break
+                        if not meta_synced:
                             break
             except Exception:
                 meta_synced = False

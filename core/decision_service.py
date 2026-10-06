@@ -34,10 +34,13 @@ def _parse_diff_fields(diff_summary: Optional[str]) -> Dict[str, str]:
         return {}
     text = diff_summary
     reason = None
-    if ", reason=" in text:
-        text, reason = text.split(", reason=", 1)
-    elif text.startswith("reason="):
-        return {"reason": text[7:]}
+    # 只有 restore 类型的快照摘要才包含独立的 ", reason=" 字段；
+    # 普通 save 决策快照 (以 v{version} 开头) 不包含 reason 字段，request_id 中出现的 ", reason=" 属于其请求 ID 字符本身 (R4, T08)
+    if not re.match(r"^v\d+", text):
+        if ", reason=" in text:
+            text, reason = text.split(", reason=", 1)
+        elif text.startswith("reason="):
+            return {"reason": text[7:]}
 
     fields: Dict[str, str] = {}
     if reason is not None:
@@ -535,17 +538,16 @@ class DecisionService:
                     if rows:
                         base_count = 0
                         if prior_rev_id:
-                            for br in self.db.get_revisions(limit=20, topic_id=topic_id):
-                                if br["rev_id"] == prior_rev_id:
-                                    try:
-                                        snap = json.loads(br["snapshot_json"])
-                                        base_count = sum(
-                                            1 for c in snap.get("changelog", [])
-                                            if c.get("scope") == scope_str and c.get("change") == change_str and c.get("basis") == basis_str
-                                        )
-                                    except Exception:
-                                        base_count = 0
-                                    break
+                            prior_rev = self.db.get_revision_by_id(prior_rev_id)
+                            if prior_rev and prior_rev.get("snapshot_json"):
+                                try:
+                                    snap = json.loads(prior_rev["snapshot_json"])
+                                    base_count = sum(
+                                        1 for c in snap.get("changelog", [])
+                                        if c.get("scope") == scope_str and c.get("change") == change_str and c.get("basis") == basis_str
+                                    )
+                                except Exception:
+                                    base_count = 0
                         if len(rows) > base_count:
                             changelog_already_recorded = True
 
