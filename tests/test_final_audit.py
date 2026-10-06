@@ -147,6 +147,20 @@ class FinalAuditTests(unittest.TestCase):
         self.svc.save_topic("a", {"commit_message": "Metadata-only change"}, expected_version=1)
         self.assertEqual(self.app.load_all_topics_meta()[0]["last_agent_reply"], "Actual reply")
 
+    def test_multiple_rounds_do_not_use_field_count_as_round_number(self):
+        for number in range(1, 5):
+            self.svc.save_topic("a", {"title": "Many rounds", "commit_message": f"Change {number}",
+                                     "new_user_opinion": f"User {number}", "new_agent_reply": f"Agent {number}"},
+                                expected_version=number-1 if number > 1 else None)
+            report = self.svc.recovery.check_consistency()
+            self.assertTrue(report["consistent"], report)
+        discussions = json.loads(self.svc.db.get_topic("a")["discussion_json"])
+        self.assertEqual([d["val"] for d in discussions if "用户" in d["key"]],
+                         [f"User {number}" for number in range(1, 5)])
+        revision = self.svc.db.get_revisions()[0]["rev_id"]
+        self.svc.restore_single_topic("a", revision, expected_version=4)
+        self.assertTrue(self.svc.recovery.check_consistency()["consistent"])
+
     def test_id_validation_does_not_load_all_topic_bodies(self):
         self.svc.save_topic("a", {"title": "Topic"})
         with patch.object(self.svc.db, "get_all_topics", side_effect=AssertionError("all bodies loaded")):

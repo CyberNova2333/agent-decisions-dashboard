@@ -419,8 +419,7 @@ class DecisionService:
             # 外部 Markdown 改动检测：若在本次保存前磁盘轮次已被直接编辑，先将该真实前态导入为独立基线 (F10, G02)
             if existing_row and existing_doc:
                 disk_disc = []
-                for r in current_rounds:
-                    rnd = r.get("round", len(disk_disc) + 1)
+                for rnd, r in enumerate(current_rounds, 1):
                     c_msg = (r.get("commit_message") or "").strip()
                     u_op = (r.get("user_opinion") or "").strip()
                     a_rep = (r.get("agent_reply") or "").strip()
@@ -490,8 +489,7 @@ class DecisionService:
         # 优先基于权威 Markdown 既有轮次构建，确保手工直接修改的讨论内容不被陈旧的数据库字段覆盖 (F05, U11)
         discussion = []
         if existing_doc and existing_doc.get("rounds"):
-            for r in existing_doc["rounds"]:
-                rnd = r.get("round", len(discussion) + 1)
+            for rnd, r in enumerate(existing_doc["rounds"], 1):
                 c_msg = (r.get("commit_message") or "").strip()
                 u_op = (r.get("user_opinion") or "").strip()
                 a_rep = (r.get("agent_reply") or "").strip()
