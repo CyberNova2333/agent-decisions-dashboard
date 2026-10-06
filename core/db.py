@@ -11,6 +11,7 @@ import hashlib
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 from core.config import Config
+from core.contracts import canonical_impl_state
 
 class VersionConflictError(Exception):
     """并发写入版本冲突异常"""
@@ -21,7 +22,7 @@ class VersionConflictError(Exception):
         super().__init__(f"议题 [{topic_id}] 发生版本并发冲突：当前服务端版本为 v{current_version}，提交所基于的版本为 v{expected_version}")
 
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 
 class DatabaseManager:
     def __init__(self, db_path: Path, config: Optional[Config] = None):
@@ -96,6 +97,14 @@ class DatabaseManager:
             for col_name, col_type in migrations:
                 if col_name not in existing_cols:
                     cursor.execute(f"ALTER TABLE topics ADD COLUMN {col_name} {col_type}")
+            if "workflow_state" not in existing_cols:
+                cursor.execute("UPDATE topics SET workflow_state = lifecycle_status")
+            if "implementation_state" not in existing_cols:
+                for legacy, canonical in [("未实现", "not_started"), ("未开始", "not_started"),
+                                          ("进行中", "in_progress"), ("已实现", "implemented"),
+                                          ("已完成", "implemented"), ("已核验", "verified")]:
+                    cursor.execute("UPDATE topics SET implementation_state=? WHERE impl_status IN (?, ?)",
+                                   (canonical, legacy, canonical))
 
             # 幂等性保存去重表 (Idempotency Keys)
             cursor.execute("""
@@ -141,6 +150,10 @@ class DatabaseManager:
                 )
             """)
 
+            rev_cols = {row["name"] for row in cursor.execute("PRAGMA table_info(revisions)")}
+            if "snapshot_topic_ids" not in rev_cols:
+                cursor.execute("ALTER TABLE revisions ADD COLUMN snapshot_topic_ids TEXT")
+
             # 已定结论清单表
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS settled_decisions (
@@ -174,9 +187,9 @@ class DatabaseManager:
             """)
             conn.commit()
 
-    def get_all_topics(self) -> List[Dict[str, Any]]:
+    def get_all_topics(self, conn: Optional[sqlite3.Connection] = None) -> List[Dict[str, Any]]:
         """获取所有议题记录"""
-        with self.get_connection() as conn:
+        with (nullcontext(conn) if conn is not None else self.get_connection()) as conn:
             cursor = conn.cursor()
             rows = cursor.execute("SELECT * FROM topics ORDER BY rowid ASC").fetchall()
             return [dict(r) for r in rows]
@@ -187,6 +200,14 @@ class DatabaseManager:
             cursor = conn.cursor()
             row = cursor.execute("SELECT * FROM topics WHERE id = ?", (topic_id,)).fetchone()
             return dict(row) if row else None
+
+    def get_topic_ids(self) -> List[str]:
+        with self.get_connection() as conn:
+            return [row[0] for row in conn.execute("SELECT id FROM topics")]
+
+    def get_changelog(self) -> List[Dict[str, Any]]:
+        with self.get_connection() as conn:
+            return [dict(row) for row in conn.execute("SELECT date, scope, change, basis FROM changelog ORDER BY id DESC")]
 
     def get_topic_max_version(self, topic_id: str) -> int:
         """获取议题的历史最高代次（高水位号），即便议题已被回滚删除，序列号亦不倒退 (F04, U10)"""
@@ -216,7 +237,7 @@ class DatabaseManager:
         wf_state = data.get("workflow_state") or data.get("lifecycle_status") or "discussing"
         lc_status = data.get("lifecycle_status") or wf_state
         
-        impl_state = data.get("implementation_state")
+        impl_state = canonical_impl_state(data.get("implementation_state"))
         if not impl_state:
             legacy_impl = data.get("impl_status", "")
             if legacy_impl in ["已实现", "已完成", "implemented"]:
@@ -377,7 +398,8 @@ class DatabaseManager:
                 c.commit()
                 return res
 
-    def check_idempotency(self, request_id: str, topic_id_or_hash: str, req_hash: Optional[str] = None) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    def check_idempotency(self, request_id: str, topic_id_or_hash: str, req_hash: Optional[str] = None,
+                          conn: Optional[sqlite3.Connection] = None) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """
         检查幂等性请求状态：
         返回 (is_valid, cached_response)
@@ -395,7 +417,7 @@ class DatabaseManager:
             expected_topic = topic_id_or_hash
             expected_hash = req_hash
 
-        with self.get_connection() as conn:
+        with (nullcontext(conn) if conn is not None else self.get_connection()) as conn:
             cursor = conn.cursor()
             row = cursor.execute(
                 "SELECT topic_id, req_hash, response_json, status FROM idempotency_keys WHERE request_id = ?",
@@ -418,13 +440,15 @@ class DatabaseManager:
         topic_id: str,
         req_hash: str,
         response_data: Dict[str, Any],
-        status: str = "completed"
+        status: str = "completed",
+        conn: Optional[sqlite3.Connection] = None
     ):
         """记录已完成或已持久化的幂等请求结果"""
         if not request_id:
             return
         now_iso = datetime.datetime.now().isoformat()
-        with self.get_connection() as conn:
+        owns_connection = conn is None
+        with (nullcontext(conn) if conn is not None else self.get_connection()) as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO idempotency_keys (request_id, topic_id, req_hash, response_json, created_at, status)
@@ -436,7 +460,8 @@ class DatabaseManager:
                     created_at=excluded.created_at,
                     status=excluded.status
             """, (request_id, topic_id, req_hash, json.dumps(response_data, ensure_ascii=False), now_iso, status))
-            conn.commit()
+            if owns_connection:
+                conn.commit()
 
     def record_changelog(self, scope: str, change: str, basis: str):
         """记录一条变更日志"""
@@ -459,14 +484,16 @@ class DatabaseManager:
         agent_reply: str = "",
         new_lifecycle: Optional[str] = None,
         old_lifecycle: Optional[str] = None,
-        diff_summary: str = ""
+        diff_summary: str = "",
+        conn: Optional[sqlite3.Connection] = None
     ) -> Dict[str, Any]:
-        """为当前全量数据库生成一份不可篡改的 Revision 快照，支持随时时间旅行回退"""
+        """保存当前数据快照及轻量议题 ID 索引，用于历史列表和恢复。"""
         now_dt = datetime.datetime.now()
         now_str = now_dt.isoformat()
         rev_hash = "rev-" + hashlib.sha1((now_str + summary).encode("utf-8")).hexdigest()[:8]
 
-        with self.get_connection() as conn:
+        owns_connection = conn is None
+        with (nullcontext(conn) if conn is not None else self.get_connection()) as conn:
             cursor = conn.cursor()
             topic_title = ""
             if topic_id:
@@ -480,14 +507,16 @@ class DatabaseManager:
                 INSERT INTO revisions (
                     rev_hash, created_at, author, action_type, topic_id, topic_title,
                     summary, old_lifecycle, new_lifecycle, user_opinion, agent_reply,
-                    diff_summary, snapshot_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    diff_summary, snapshot_json, snapshot_topic_ids
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 rev_hash, now_str, author, action_type, topic_id, topic_title,
                 summary, old_lifecycle, new_lifecycle, user_opinion, agent_reply,
-                diff_summary, json.dumps(snapshot, ensure_ascii=False)
+                diff_summary, json.dumps(snapshot, ensure_ascii=False),
+                json.dumps([t["id"] for t in snapshot["topics"]])
             ))
-            conn.commit()
+            if owns_connection:
+                conn.commit()
             rev_id = cursor.lastrowid
             return {"rev_id": rev_id, "rev_hash": rev_hash, "created_at": now_str}
 
@@ -499,7 +528,8 @@ class DatabaseManager:
                 rows = cursor.execute("""
                     SELECT rev_id, rev_hash, created_at, author, action_type,
                            topic_id, topic_title, summary, old_lifecycle,
-                           new_lifecycle, user_opinion, agent_reply, diff_summary, snapshot_json
+                           new_lifecycle, user_opinion, agent_reply, diff_summary, snapshot_topic_ids,
+                           CASE WHEN snapshot_topic_ids IS NULL THEN snapshot_json END AS snapshot_json
                     FROM revisions
                     WHERE topic_id = ? OR topic_id IS NULL OR topic_id = '' OR action_type IN ('FULL_ROLLBACK', 'IMPORT_FULL', 'INIT', 'BASELINE_IMPORT')
                     ORDER BY rev_id DESC
@@ -509,7 +539,8 @@ class DatabaseManager:
                 rows = cursor.execute("""
                     SELECT rev_id, rev_hash, created_at, author, action_type,
                            topic_id, topic_title, summary, old_lifecycle,
-                           new_lifecycle, user_opinion, agent_reply, diff_summary, snapshot_json
+                           new_lifecycle, user_opinion, agent_reply, diff_summary, snapshot_topic_ids,
+                           CASE WHEN snapshot_topic_ids IS NULL THEN snapshot_json END AS snapshot_json
                     FROM revisions
                     ORDER BY rev_id DESC
                     LIMIT ? OFFSET ?
@@ -518,16 +549,17 @@ class DatabaseManager:
             result = []
             for r in rows:
                 d = dict(r)
-                snap_ids = []
-                if d.get("snapshot_json"):
-                    try:
-                        snap_obj = json.loads(d["snapshot_json"])
-                        snap_ids = [t["id"] for t in snap_obj.get("topics", []) if "id" in t]
-                    except Exception:
-                        snap_ids = []
+                if d.get("snapshot_topic_ids") is not None:
+                    snap_ids = json.loads(d["snapshot_topic_ids"])
+                else:
+                    snap_obj = json.loads(d["snapshot_json"])
+                    snap_ids = [t["id"] for t in snap_obj.get("topics", []) if "id" in t]
+                    cursor.execute("UPDATE revisions SET snapshot_topic_ids=? WHERE rev_id=?",
+                                   (json.dumps(snap_ids), d["rev_id"]))
                 d["snapshot_topic_ids"] = snap_ids
                 d.pop("snapshot_json", None)
                 result.append(d)
+            conn.commit()  # Only legacy rows need this derived-cache backfill.
             return result
 
     def get_revision_by_id(self, rev_id: int) -> Optional[Dict[str, Any]]:

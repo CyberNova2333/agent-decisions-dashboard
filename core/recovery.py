@@ -14,6 +14,9 @@ from typing import Dict, Any, List, Optional
 from core.config import Config
 from core.db import DatabaseManager
 from core.markdown_parser import TopicMarkdownParser
+from core.contracts import validate_portable_id
+from core.locking import serialized
+from collections import Counter
 
 
 class RecoveryManager:
@@ -48,6 +51,9 @@ class RecoveryManager:
             "implementation_state": str(data.get("implementation_state", "")).strip(),
             "impl_commit": str(data.get("impl_commit", "")).strip(),
             "impl_verifier": str(data.get("impl_verifier", "")).strip(),
+            "decision_status": str(data.get("decision_status", "")).strip(),
+            "sources": str(data.get("sources", "")).strip(),
+            "priority": str(data.get("priority", "")).strip(),
             "version": int(data.get("version") or 1),
             "content": core_content.strip(),
             "rounds": rounds_json
@@ -131,6 +137,9 @@ class RecoveryManager:
                         "implementation_state": db_t.get("implementation_state", "not_started"),
                         "impl_commit": db_t.get("impl_commit", ""),
                         "impl_verifier": db_t.get("impl_verifier", ""),
+                        "decision_status": db_t.get("decision_status", ""),
+                        "sources": db_t.get("sources", ""),
+                        "priority": db_t.get("priority", ""),
                         "version": db_ver
                     }
                     db_digest = self._compute_digest(db_t_norm, db_t.get("content", ""), db_rounds_reconstructed)
@@ -212,6 +221,7 @@ class RecoveryManager:
             "desynced_topics": desynced_topics
         }
 
+    @serialized
     def rebuild_index_from_markdown(self) -> Dict[str, Any]:
         """
         以 Markdown 文件为绝对权威事实源，全量重建 SQLite 索引与 metadata.json (R04)：
@@ -231,12 +241,19 @@ class RecoveryManager:
         parsed_items = []
         errors = []
         seen_ids = set()
+        name_counts = Counter(p.stem.casefold() for p in md_files)
 
         # 1. 扫描、解析并校验所有文件
         for p in md_files:
             try:
                 parsed = self.parser.parse_markdown_file(p)
                 topic_id = parsed.get("id") or p.stem
+                validate_portable_id(topic_id)
+                if name_counts[p.stem.casefold()] > 1:
+                    raise ValueError(f"议题文件名仅大小写不同: {p.name}")
+                version = parsed.get("version", 1)
+                if type(version) is not int or not 1 <= version < 2 ** 63:
+                    raise ValueError("议题版本必须是有效正整数")
                 if not re.match(r'^[a-zA-Z0-9_\-]+$', topic_id) or topic_id != p.stem:
                     errors.append({"file": p.name, "error": f"议题 ID 非法或与文件名不匹配: [{topic_id}] vs [{p.stem}]"})
                     raise ValueError(f"发现非法或越界的议题 ID: [{topic_id}] in {p.name}")
@@ -265,11 +282,11 @@ class RecoveryManager:
                     "object": parsed.get("object", "通用系统"),
                     "function": parsed.get("function", "核心规范"),
                     "lifecycle_status": parsed.get("workflow_state", "discussing"),
-                    "decision_status": "已定" if parsed.get("workflow_state") == "decided" else "待定",
+                    "decision_status": parsed.get("decision_status", "已定" if parsed.get("workflow_state") == "decided" else "待定"),
                     "impl_status": parsed.get("implementation_state", "not_started"),
                     "priority": parsed.get("priority", "普通"),
                     "content": parsed.get("core_content", ""),
-                    "sources": "",
+                    "sources": parsed.get("sources", ""),
                     "discussion": discussion,
                     "workflow_state": parsed.get("workflow_state", "discussing"),
                     "decision_outcome": parsed.get("decision_outcome", ""),
@@ -341,9 +358,9 @@ class RecoveryManager:
             "message": f"从 Markdown 重建了 {len(rebuilt_ids)} 条议题索引（保留文件版本号）！"
         }
 
-    def sync_metadata_json(self):
+    def sync_metadata_json(self, conn=None):
         """将当前数据库数据派生同步至 metadata.json"""
-        topics = self.db.get_all_topics()
+        topics = self.db.get_all_topics(conn=conn)
         meta_list = []
         for r in topics:
             topic_id = r["id"]
@@ -381,4 +398,11 @@ class RecoveryManager:
             "total_topics": len(meta_list),
             "topics": meta_list
         }, ensure_ascii=False, indent=2)
-        self.config.metadata_json_path.write_text(meta_content, encoding="utf-8")
+        target = self.config.metadata_json_path
+        temp = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            temp.write_text(meta_content, encoding="utf-8")
+            os.replace(temp, target)
+        finally:
+            if temp.exists():
+                temp.unlink()

@@ -13,7 +13,7 @@
   "git_commit": {
     "enabled": true,
     "commit_prefix": "feat(decision)",
-    "co_author": "Antigravity <antigravity@google.com>",
+    "co_author": "",
     "include_user_opinion": true,
     "include_agent_reply": true
   },

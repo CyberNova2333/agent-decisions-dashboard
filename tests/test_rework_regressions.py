@@ -125,16 +125,11 @@ class TestReworkRegressions(unittest.TestCase):
     def test_N02_two_service_writers_must_not_both_accept_v1(self):
         self.save()
         barrier = threading.Barrier(2)
-        orig = self.svc.db.get_topic
-
-        def get(tid):
-            row = orig(tid)
-            if tid == "a" and threading.current_thread().name.startswith("audit-writer"):
-                barrier.wait(timeout=5)
-            return row
 
         def writer(title):
             try:
+                # Race at admission; the project lock now serializes baseline reads.
+                barrier.wait(timeout=5)
                 r = self.svc.save_topic("a", {"title": title}, expected_version=1)
                 return {"status": "success", "version": r["new_version"]}
             except VersionConflictError:
@@ -142,9 +137,8 @@ class TestReworkRegressions(unittest.TestCase):
             except Exception as e:
                 return {"status": "error", "error": repr(e)}
 
-        with patch.object(self.svc.db, "get_topic", side_effect=get):
-            with ThreadPoolExecutor(max_workers=2, thread_name_prefix="audit-writer") as pool:
-                result = list(pool.map(writer, ["Writer A", "Writer B"]))
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="audit-writer") as pool:
+            result = list(pool.map(writer, ["Writer A", "Writer B"]))
 
         self.assertEqual(sum(x["status"] == "success" for x in result), 1, "Both stale-baseline writers succeeded")
         self.assertEqual(sorted(x["status"] for x in result), ["conflict", "success"])
@@ -288,13 +282,13 @@ class TestReworkRegressions(unittest.TestCase):
     def test_N13_verify_must_reject_null_commit_with_400(self):
         self.save()
         with self.http() as (server, app, errors):
-            result = self.request(server, "/api/topic/a/verify", {"impl_commit": None})
+            result = self.request(server, "/api/topic/a/verify", {"impl_commit": None, "expected_version": 1})
             self.assertEqual(result["status"], 400, "Malformed verification input aborts connection instead of returning validation error")
 
     def test_N14_verify_must_not_treat_false_string_as_true(self):
         self.save()
         with self.http() as (server, app, errors):
-            result = self.request(server, "/api/topic/a/verify", {"impl_commit": "abc1234", "mark_verified": "false"})
+            result = self.request(server, "/api/topic/a/verify", {"impl_commit": "abc1234", "mark_verified": "false", "expected_version": 1})
             self.assertEqual(result["status"], 400, "String false silently marks a topic VERIFIED")
 
     def test_N15_save_must_not_overwrite_unindexed_authoritative_metadata(self):
@@ -334,7 +328,7 @@ class TestReworkRegressions(unittest.TestCase):
     def test_N17_valid_false_boolean_preserves_implemented_state(self):
         self.save()
         with self.http() as (server, app, errors):
-            result = self.request(server, "/api/topic/a/verify", {"impl_commit": "abc1234", "mark_verified": False})
+            result = self.request(server, "/api/topic/a/verify", {"impl_commit": "abc1234", "mark_verified": False, "expected_version": 1})
             self.assertEqual(result["status"], 200)
             self.assertEqual(app.db.get_topic("a")["implementation_state"], "implemented")
 

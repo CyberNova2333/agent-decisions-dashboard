@@ -12,8 +12,13 @@ import datetime
 import argparse
 import webbrowser
 import urllib.parse
+import ipaddress
+import re
+import socket
+import hashlib
+import sqlite3
 from pathlib import Path
-from http.server import HTTPServer, SimpleHTTPRequestHandler
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from typing import Dict, Any, Optional
 
 if sys.platform == "win32":
@@ -30,18 +35,41 @@ from core.git_engine import GitEngine
 from core.decision_service import DecisionService, TopicValidationError, IdempotencyConflictError
 from core.recovery import RecoveryManager
 from core.agent_context import AgentContextEngine
+from core.locking import ledger_lock
 
 MAX_BODY_SIZE = 10 * 1024 * 1024  # 10MB 最大请求体限制防 DoS
+REQUEST_TIMEOUT = 10
+
+
+def is_loopback_host(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+class DashboardHTTPServer(ThreadingHTTPServer):
+    daemon_threads = False  # server_close waits for in-flight writes on clean shutdown.
+    def __init__(self, address, handler):
+        if not is_loopback_host(address[0]):
+            raise ValueError("看板仅支持本机回环地址监听")
+        if ":" in address[0]:
+            self.address_family = socket.AF_INET6
+        super().__init__(address, handler)
 
 class DashboardServer:
     def __init__(self, config: Config, web_dir: Optional[Path] = None, host: Optional[str] = None, port: Optional[int] = None):
+        self.host = config.host if host is None else host
+        self.port = config.port if port is None else port
+        if not is_loopback_host(self.host):
+            raise ValueError("看板没有远程认证，仅允许 localhost 或回环 IP 地址监听")
         self.config = config
         self.repo_root = config.base_dir
         builtin_web = Path(__file__).resolve().parent / "web"
         source_web = Path(__file__).resolve().parent.parent / "web"
         self.web_dir = web_dir or (builtin_web if builtin_web.exists() else source_web)
-        self.host = host or getattr(config, "host", "127.0.0.1")
-        self.port = port or getattr(config, "port", 8765)
         self.service = DecisionService(config)
         self.recovery = RecoveryManager(config, self.service.db)
         self.agent = AgentContextEngine(config, self.service.db)
@@ -49,11 +77,11 @@ class DashboardServer:
         self.git = self.service.git
         self.parser = self.service.parser
 
-        # 启动时自检并初始化：若库为空且有 metadata.json，则自动导入
+        # 启动时自检并初始化：只从权威 Markdown 导入
         self._ensure_initial_data()
 
     def _ensure_initial_data(self):
-        """冷启动自愈：数据库为空时从 Markdown 或 metadata.json 导入初始议题"""
+        """数据库为空时从 Markdown 导入；摘要导出不能用于恢复正文。"""
         try:
             db_topics = self.db.get_all_topics()
             if not db_topics:
@@ -61,9 +89,7 @@ class DashboardServer:
                 if self.config.decisions_dir.exists() and list(self.config.decisions_dir.glob("*.md")):
                     self.recovery.rebuild_index_from_markdown()
                 elif self.config.metadata_json_path.exists():
-                    data = json.loads(self.config.metadata_json_path.read_text(encoding="utf-8"))
-                    for t in data.get("topics", []):
-                        self.db.upsert_topic(t)
+                    print("[WARN] 只有 metadata.json 摘要，未找到权威 Markdown；未导入议题，请恢复原始文档")
 
             # 若修订历史为空（如全新空项目），建立初始空基线快照供回滚/撤销首次创建 (R11)
             if len(self.db.get_revisions(limit=1)) == 0:
@@ -76,54 +102,67 @@ class DashboardServer:
             print(f"[WARN] 初始数据自检异常: {e}")
 
     def load_all_topics_meta(self) -> list:
-        """从 SQLite 读取所有议题的元数据列表（毫秒级冷启动）"""
+        """从当前 SQLite 索引读取元数据；文件漂移由一致性检查处理。"""
         topics_list = []
-        try:
-            db_topics = self.db.get_all_topics()
-            for r in db_topics:
-                topic_id = r["id"]
-                md_file = self.config.decisions_dir / f"{topic_id}.md"
-                rounds_count = self.parser.count_rounds(md_file)
+        db_topics = self.db.get_all_topics()
+        for r in db_topics:
+            topic_id = r["id"]
 
-                discussion = json.loads(r["discussion_json"]) if r.get("discussion_json") else []
-                user_op = ""
-                agent_rep = ""
-                for d in discussion:
-                    k = d.get("key", "")
-                    if "用户" in k:
-                        user_op = d.get("val", "")
-                    elif "答复" in k or "说明" in k:
-                        agent_rep = d.get("val", "")
+            discussion = json.loads(r["discussion_json"]) if r.get("discussion_json") else []
+            rounds_count = len(self.service._reconstruct_rounds_from_topic(dict(r, discussion=discussion)))
+            user_op = ""
+            agent_rep = ""
+            for d in discussion:
+                k = d.get("key", "")
+                if "用户" in k:
+                    user_op = d.get("val", "")
+                elif "答复" in k or "落实" in k:
+                    agent_rep = d.get("val", "")
 
-                topics_list.append({
-                    "id": topic_id,
-                    "title": r["title"],
-                    "file": f"decisions/{topic_id}.md",
-                    "section": r["section"],
-                    "object": r["object"],
-                    "function": r["function"],
-                    "lifecycle_status": r["lifecycle_status"],
-                    "workflow_state": r.get("workflow_state") or r["lifecycle_status"],
-                    "decision_outcome": r.get("decision_outcome") or "",
-                    "rejection_reason": r.get("rejection_reason") or "",
-                    "superseded_by": r.get("superseded_by") or "",
-                    "implementation_state": r.get("implementation_state") or "not_started",
-                    "impl_commit": r.get("impl_commit") or "",
-                    "impl_verifier": r.get("impl_verifier") or "",
-                    "version": r.get("version", 1),
-                    "decision_status": r["decision_status"],
-                    "impl_status": r["impl_status"],
-                    "priority": r.get("priority", "普通"),
-                    "summary": (r["content"] or "").split("\n\n")[0].replace("\n", " ")[:140],
-                    "sources": r.get("sources", ""),
-                    "rounds_count": rounds_count,
-                    "last_user_opinion": user_op if user_op != "—" else "",
-                    "last_agent_reply": agent_rep if agent_rep != "—" else "",
-                    "updated_at": r["updated_at"]
-                })
-        except Exception as e:
-            print(f"[WARN] 读取元数据失败: {e}")
+            topics_list.append({
+                "id": topic_id,
+                "title": r["title"],
+                "file": f"decisions/{topic_id}.md",
+                "section": r["section"],
+                "object": r["object"],
+                "function": r["function"],
+                "lifecycle_status": r["lifecycle_status"],
+                "workflow_state": r.get("workflow_state") or r["lifecycle_status"],
+                "decision_outcome": r.get("decision_outcome") or "",
+                "rejection_reason": r.get("rejection_reason") or "",
+                "superseded_by": r.get("superseded_by") or "",
+                "implementation_state": r.get("implementation_state") or "not_started",
+                "impl_commit": r.get("impl_commit") or "",
+                "impl_verifier": r.get("impl_verifier") or "",
+                "version": r.get("version", 1),
+                "decision_status": r["decision_status"],
+                "impl_status": r["impl_status"],
+                "priority": r.get("priority", "普通"),
+                "summary": (r["content"] or "").split("\n\n")[0].replace("\n", " ")[:140],
+                "sources": r.get("sources", ""),
+                "rounds_count": rounds_count,
+                "last_user_opinion": user_op if user_op != "—" else "",
+                "last_agent_reply": agent_rep if agent_rep != "—" else "",
+                "updated_at": r["updated_at"]
+            })
         return topics_list
+
+    @staticmethod
+    def overview_from_topics(topics):
+        """概览是当前议题的投影，不依赖需要另外维护的历史导入表。"""
+        settled, pending = [], []
+        for topic in topics:
+            wf = topic["workflow_state"]
+            outcome = topic["decision_outcome"]
+            if wf == "decided" and outcome in ("", "accepted", "rejected"):
+                label = "已否决" if outcome == "rejected" else "已决策"
+                settled.append({"title": topic["title"], "requirement": topic["summary"],
+                                "details": topic["rejection_reason"] if outcome == "rejected" else topic["decision_status"],
+                                "topic_ref": topic["id"], "outcome_label": label})
+            if wf == "pending":
+                pending.append({"item": topic["title"], "issue": topic["summary"],
+                                "focus": topic["last_user_opinion"], "topic_ref": topic["id"]})
+        return settled, pending
 
 
 def make_handler(server: DashboardServer):
@@ -131,33 +170,56 @@ def make_handler(server: DashboardServer):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=str(server.web_dir), **kwargs)
 
+        def setup(self):
+            super().setup()
+            self.connection.settimeout(REQUEST_TIMEOUT)
+
+        def _trusted_authority(self, value: str, scheme: str = "http") -> bool:
+            try:
+                parsed = urllib.parse.urlsplit(f"{scheme}://{value}")
+                allowed_hosts = {server.host, self.server.server_address[0], "localhost"}
+                return (
+                    scheme == "http" and parsed.hostname in allowed_hosts
+                    and parsed.username is None and parsed.password is None
+                    and not parsed.path and not parsed.query and not parsed.fragment
+                    and (parsed.port or 80) == self.server.server_port
+                )
+            except ValueError:
+                return False
+
+        def parse_request(self):
+            if not super().parse_request():
+                return False
+            hosts = self.headers.get_all("Host", [])
+            if len(hosts) != 1 or not self._trusted_authority(hosts[0]):
+                self.send_error(403, "Untrusted Host")
+                return False
+            origins = self.headers.get_all("Origin", [])
+            if len(origins) > 1 or (origins and not self._get_allowed_origin()):
+                self.send_error(403, "Untrusted Origin")
+                return False
+            return True
+
         def _get_allowed_origin(self) -> Optional[str]:
             origin = self.headers.get("Origin")
             if not origin:
                 return None
             try:
-                parsed_origin = urllib.parse.urlparse(origin)
-                if parsed_origin.scheme not in ("http", "https"):
-                    return None
-                host = parsed_origin.hostname
-                allowed_hosts = {"localhost", "127.0.0.1"}
-                srv_host = getattr(server, "host", None) or getattr(server.config, "host", "127.0.0.1")
-                if srv_host:
-                    allowed_hosts.add(srv_host)
-                if host in allowed_hosts:
-                    origin_port = parsed_origin.port or (443 if parsed_origin.scheme == "https" else 80)
-                    srv_port = getattr(getattr(self, "server", None), "server_port", None) or getattr(server, "port", None) or getattr(server.config, "port", 8765)
-                    if origin_port == srv_port:
-                        return origin
-
-                    explicit_allowed = getattr(server.config, "allowed_origins", None) or []
-                    if origin in explicit_allowed:
-                        return origin
+                parsed_origin = urllib.parse.urlsplit(origin)
+                request_host = urllib.parse.urlsplit("http://" + self.headers.get("Host", "")).hostname
+                if (not parsed_origin.path and not parsed_origin.query and not parsed_origin.fragment
+                        and parsed_origin.hostname == request_host
+                        and self._trusted_authority(parsed_origin.netloc, parsed_origin.scheme)):
+                    return origin
             except Exception:
                 pass
             return None
 
         def end_headers(self):
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Cache-Control", "no-store")
             try:
                 allowed_origin = self._get_allowed_origin()
                 if allowed_origin:
@@ -168,6 +230,19 @@ def make_handler(server: DashboardServer):
             except Exception:
                 pass
             super().end_headers()
+
+        def send_head(self):
+            # SimpleHTTPRequestHandler otherwise follows links outside the web root.
+            target = Path(self.translate_path(self.path)).resolve()
+            try:
+                target.relative_to(server.web_dir.resolve())
+            except ValueError:
+                self.send_error(404)
+                return None
+            if not target.is_file():
+                self.send_error(404)
+                return None
+            return super().send_head()
 
         def do_OPTIONS(self):
             origin = self.headers.get("Origin")
@@ -191,6 +266,14 @@ def make_handler(server: DashboardServer):
             self.wfile.write(text.encode("utf-8"))
 
         def do_GET(self):
+            # Reads must not observe a half-finished file/index mutation.
+            with ledger_lock(server.config.database_path):
+                try:
+                    self._dispatch_get()
+                except (OSError, ValueError, KeyError, sqlite3.Error) as exc:
+                    self._send_json(500, {"error": "read_failed", "message": str(exc)})
+
+        def _dispatch_get(self):
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
             query_params = urllib.parse.parse_qs(parsed.query)
@@ -212,8 +295,9 @@ def make_handler(server: DashboardServer):
                     "status": "ok",
                     "project_name": server.config.project_name,
                     "database": str(server.config.database_path.name),
+                    "database_path": str(server.config.database_path.resolve()),
                     "git_commit": head_hash,
-                    "topics_dir": str(server.config.decisions_dir),
+                    "topics_dir": str(server.config.decisions_dir.resolve()),
                     "consistency": consistency,
                     "server_time": datetime.datetime.now().isoformat()
                 }
@@ -222,12 +306,12 @@ def make_handler(server: DashboardServer):
 
             elif path == "/api/topics":
                 meta_list = server.load_all_topics_meta()
-                full_data = server.db.export_full_data()
+                settled, pending = server.overview_from_topics(meta_list)
                 res = {
                     "topics": meta_list,
-                    "settled_decisions": full_data.get("settled_decisions", []),
-                    "open_questions": full_data.get("open_questions", []),
-                    "changelog": full_data.get("changelog", []),
+                    "settled_decisions": settled,
+                    "open_questions": pending,
+                    "changelog": server.db.get_changelog(),
                     "config": server.config.to_dict()
                 }
                 self._send_json(200, res)
@@ -277,7 +361,9 @@ def make_handler(server: DashboardServer):
 
                 commits = server.git.get_commit_history(limit=limit_val)
                 revisions = server.db.get_revisions(limit=limit_val, offset=offset_val, topic_id=tid)
-                self._send_json(200, {"commits": commits, "revisions": revisions})
+                head_revision = server.db.get_revisions(limit=1)
+                self._send_json(200, {"commits": commits, "revisions": revisions,
+                                      "current_revision": head_revision[0]["rev_id"] if head_revision else 0})
                 return
 
             elif path == "/api/agent/context":
@@ -306,6 +392,16 @@ def make_handler(server: DashboardServer):
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
 
+            if self.headers.get("Sec-Fetch-Site") == "cross-site":
+                self._send_json(403, {"error": "forbidden_origin", "message": "拒绝跨站写入"})
+                return
+            if self.headers.get_content_type() != "application/json":
+                self._send_json(415, {"error": "unsupported_media_type", "message": "写请求必须使用 application/json"})
+                return
+            if self.headers.get_all("Transfer-Encoding") or len(self.headers.get_all("Content-Length", [])) != 1:
+                self._send_json(400, {"error": "bad_request", "message": "必须提供唯一 Content-Length，不支持 Transfer-Encoding"})
+                return
+
             cl_header = self.headers.get("Content-Length")
             try:
                 length = int(cl_header) if cl_header is not None else 0
@@ -322,8 +418,12 @@ def make_handler(server: DashboardServer):
 
             try:
                 raw_bytes = self.rfile.read(length) if length > 0 else b"{}"
-            except Exception:
-                raw_bytes = b"{}"
+            except (TimeoutError, OSError):
+                self._send_json(408, {"error": "request_timeout", "message": "请求体读取超时或中断"})
+                return
+            if length and len(raw_bytes) != length:
+                self._send_json(400, {"error": "incomplete_body", "message": "请求体不完整"})
+                return
 
             # 跨站请求防御：若带有非受信任的 Origin，阻断写请求 (R12, F10)
             origin = self.headers.get("Origin")
@@ -347,17 +447,56 @@ def make_handler(server: DashboardServer):
                 self._send_json(400, {"error": "bad_json", "message": "顶层 JSON 数据必须是对象 (Object)"})
                 return
 
-            request_id = self.headers.get("X-Request-ID") or data.get("request_id")
-            expected_ver_raw = self.headers.get("X-Expected-Version") or data.get("expected_version")
+            with ledger_lock(server.config.database_path):
+                self._dispatch_post(data)
+
+        def _dispatch_post(self, data):
+            path = urllib.parse.urlparse(self.path).path
+            for field in ("rev_id", "expected_revision"):
+                if field in data and (type(data[field]) is not int or data[field] < 1):
+                    self._send_json(400, {"error": "validation_error", "message": f"{field} 必须为正整数"})
+                    return
+
+            request_id = self.headers.get("X-Request-ID", data.get("request_id"))
+            if request_id is not None and (not isinstance(request_id, str) or not request_id.strip() or len(request_id) > 256):
+                self._send_json(400, {"error": "invalid_request_id", "message": "请求 ID 必须为 1–256 字符的非空字符串"})
+                return
+            expected_ver_raw = self.headers.get("X-Expected-Version", data.get("expected_version"))
             expected_ver = None
             if expected_ver_raw is not None:
                 try:
+                    if type(expected_ver_raw) is not int and not (isinstance(expected_ver_raw, str) and re.fullmatch(r"[0-9]+", expected_ver_raw)):
+                        raise ValueError("invalid version type")
                     expected_ver = int(expected_ver_raw)
                     if expected_ver < 1:
                         self._send_json(400, {"error": "invalid_expected_version", "message": "X-Expected-Version 必须是大于等于 1 的正整数"})
                         return
                 except (ValueError, TypeError):
                     self._send_json(400, {"error": "invalid_expected_version", "message": "X-Expected-Version 格式非法，必须是有效整数"})
+                    return
+
+            match = re.fullmatch(r"/api/topic/([^/]+)/(save|restore|verify)", path)
+            if path.startswith("/api/topic/") and path != "/api/topic/create":
+                if not match:
+                    self._send_json(404, {"error": "not_found"})
+                    return
+                try:
+                    server.service.validate_topic_id(match[1])
+                except TopicValidationError as e:
+                    self._send_json(400, {"error": "validation_error", "message": str(e)})
+                    return
+                creation_replay = False
+                if expected_ver is None and match[2] == "save" and request_id:
+                    req_hash = hashlib.sha256(f"{match[1]}:None:{json.dumps(data, sort_keys=True, ensure_ascii=False)}".encode("utf-8")).hexdigest()
+                    valid, cached = server.db.check_idempotency(request_id, match[1], req_hash)
+                    creation_replay = valid and cached is not None
+                elif expected_ver is None and match[2] == "restore" and request_id:
+                    req_hash = server.service.restore_request_hash(
+                        match[1], data.get("rev_id"), data.get("author", "用户/前端"), data.get("reason", ""), None)
+                    valid, cached = server.db.check_idempotency(request_id, match[1], req_hash)
+                    creation_replay = valid and cached is not None
+                if expected_ver is None and not creation_replay and (match[2] == "verify" or server.db.get_topic(match[1])):
+                    self._send_json(428, {"error": "version_required", "message": "请先读取议题，再携带 expected_version 写入"})
                     return
 
             # 1. 保存议题
@@ -466,20 +605,33 @@ def make_handler(server: DashboardServer):
                 test_summary = test_summary.strip()
 
                 try:
-                    res = server.agent.record_verification(
+                    res = server.service.record_verification(
                         topic_id=raw_id,
                         impl_commit=commit_hash,
                         verifier=verifier,
                         test_summary=test_summary,
-                        mark_verified=mark_verified
+                        mark_verified=mark_verified,
+                        expected_version=expected_ver,
+                        request_id=request_id
                     )
                     self._send_json(200, res)
+                except VersionConflictError as e:
+                    self._send_json(409, {"error": "version_conflict", "message": str(e),
+                                         "current_version": e.current_version, "expected_version": e.expected_version})
+                except IdempotencyConflictError as e:
+                    self._send_json(409, {"error": "idempotency_conflict", "message": str(e)})
+                except TopicValidationError as e:
+                    self._send_json(400, {"error": "validation_error", "message": str(e)})
                 except Exception as e:
                     self._send_json(500, {"error": "verify_failed", "message": str(e)})
                 return
 
             # 5. 全库快照回滚
             elif path == "/api/rollback":
+                expected_revision = data.get("expected_revision")
+                if expected_revision is None:
+                    self._send_json(428, {"error": "revision_required", "message": "请先读取历史列表，再携带 current_revision 作为 expected_revision"})
+                    return
                 rev_id = data.get("rev_id")
                 if not rev_id:
                     self._send_json(400, {"error": "missing_rev_id", "message": "缺少 rev_id"})
@@ -487,9 +639,13 @@ def make_handler(server: DashboardServer):
                 try:
                     res = server.service.rollback_full(
                         rev_id=int(rev_id),
-                        author=data.get("author", "用户/看板")
+                        author=data.get("author", "用户/看板"),
+                        expected_revision=expected_revision
                     )
                     self._send_json(200, res)
+                except VersionConflictError as e:
+                    self._send_json(409, {"error": "revision_conflict", "message": "看板已有新记录，请重新打开历史列表并核对后再恢复",
+                                         "current_revision": e.current_version})
                 except Exception as e:
                     self._send_json(500, {"error": "rollback_failed", "message": str(e)})
                 return
@@ -498,7 +654,7 @@ def make_handler(server: DashboardServer):
             elif path == "/api/recovery/rebuild":
                 try:
                     res = server.recovery.rebuild_index_from_markdown()
-                    self._send_json(200, res)
+                    self._send_json(200 if res.get("status") == "success" else 409, res)
                 except Exception as e:
                     self._send_json(500, {"error": "rebuild_failed", "message": str(e)})
                 return
@@ -542,8 +698,8 @@ def main():
     if args.rebuild_index:
         rec = RecoveryManager(config)
         res = rec.rebuild_index_from_markdown()
-        print(f"重建完成: {res['message']}")
-        sys.exit(0)
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        sys.exit(0 if res.get("status") == "success" else 1)
 
     if args.export_agent_context:
         agent_eng = AgentContextEngine(config)
@@ -557,8 +713,9 @@ def main():
     server = DashboardServer(config, host=host, port=port)
     handler_class = make_handler(server)
 
-    httpd = HTTPServer((host, port), handler_class)
-    url = f"http://{host}:{port}/dashboard.html"
+    httpd = DashboardHTTPServer((host, port), handler_class)
+    url_host = f"[{host}]" if ":" in host else host
+    url = f"http://{url_host}:{httpd.server_port}/dashboard.html"
     print("=" * 64)
     print(f"  {config.project_name} - 服务已启动")
     print(f"  服务地址: {url}")
@@ -573,7 +730,10 @@ def main():
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
-        print("\n服务已正常退出")
+        print("\n正在等待已接收请求结束…")
+    finally:
+        httpd.server_close()
+        print("服务已正常退出")
 
 if __name__ == "__main__":
     main()
