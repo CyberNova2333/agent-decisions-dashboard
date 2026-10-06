@@ -1087,7 +1087,9 @@
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
-        delete state.pendingRestores[restoreKey];
+        if (data && data.restored_from) {
+          delete state.pendingRestores[restoreKey];
+        }
         if (!keepDrawerOpen) {
           closeDrawer("drawer-time-machine");
         }
