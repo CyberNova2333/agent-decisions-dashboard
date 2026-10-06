@@ -6,6 +6,7 @@ Agent Decisions Dashboard - Configuration Manager
 
 import os
 import json
+import copy
 from pathlib import Path
 from typing import Dict, Any
 
@@ -23,7 +24,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "git_commit": {
         "enabled": True,
         "commit_prefix": "feat(decision)",
-        "co_author": "Antigravity <antigravity@google.com>",
+        "co_author": "",
         "include_user_opinion": True,
         "include_agent_reply": True
     },
@@ -132,19 +133,24 @@ class Config:
 
 
 def load_config(config_path: Path = None, base_dir: Path = None) -> Config:
-    """加载配置：指定路径 -> 默认路径 -> 环境变量 -> 缺省字典"""
+    """显式配置的相对路径以配置目录为基准；坏配置必须中止。"""
     if base_dir is None:
-        base_dir = Path.cwd()
+        base_dir = Path(config_path).resolve().parent if config_path is not None else Path.cwd()
 
     cfg_file = config_path or (base_dir / "dashboard.config.json")
-    loaded_data = dict(DEFAULT_CONFIG)
+    loaded_data = copy.deepcopy(DEFAULT_CONFIG)
+
+    if config_path is not None and not Path(config_path).is_file():
+        raise FileNotFoundError(f"配置文件不存在: {config_path}")
 
     if cfg_file and Path(cfg_file).exists():
         try:
             with open(cfg_file, "r", encoding="utf-8") as f:
                 user_data = json.load(f)
+                if not isinstance(user_data, dict):
+                    raise ValueError("配置根节点必须为对象")
                 loaded_data.update(user_data)
-        except Exception as e:
-            print(f"[WARN] 加载配置文件 {cfg_file} 失败: {e}，将采用默认配置")
+        except (OSError, ValueError) as e:
+            raise ValueError(f"加载配置文件 {cfg_file} 失败: {e}") from e
 
     return Config(loaded_data, base_dir)

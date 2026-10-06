@@ -12,6 +12,8 @@
     changelog: [],
     topicsDetailCache: Object.create(null),
     editSession: null,
+    createRequest: null,
+    creating: false,
     draftsByTopic: new Map(),
     selectedTopicId: null,
     viewMode: "grid",
@@ -20,10 +22,13 @@
       lifecycle: "all",
       object: "all",
       outcome: "all",
+      implementation: "all",
       searchQuery: "",
     },
     isServerOnline: false,
+    hasLoadedTopics: false,
     pendingRestores: Object.create(null),
+    historyRevision: null,
   };
 
   // Server/user strings must never be interpreted as HTML or executable JS.
@@ -85,6 +90,7 @@
         const data = await res.json();
         if (!Array.isArray(data.topics)) throw new Error("议题列表响应格式无效");
         state.topicsMeta = data.topics;
+        state.hasLoadedTopics = true;
         state.settledDecisions = data.settled_decisions || [];
         state.openQuestions = data.open_questions || [];
         state.changelog = data.changelog || [];
@@ -105,7 +111,7 @@
 
     // A failed refresh must not replace already loaded data with demo records.
     updateServerStatus(false);
-    if (!state.topicsMeta.length && window.DASHBOARD_DEFAULT_DATA) {
+    if (!state.hasLoadedTopics && window.DASHBOARD_DEFAULT_DATA) {
       const def = window.DASHBOARD_DEFAULT_DATA;
       state.topicsMeta = def.topics || [];
       state.settledDecisions = def.settled_decisions || [];
@@ -113,6 +119,7 @@
       state.changelog = def.changelog || [];
       if (def.config) applyConfig(def.config);
       updateServerStatus(false);
+      document.getElementById("server-status-text").textContent = "离线示例（非已保存数据）";
       renderTopicCards();
       renderSettledDecisions();
       renderOpenQuestions();
@@ -213,15 +220,16 @@
 
   function updateServerStatus(online) {
     state.isServerOnline = online;
+    document.getElementById("btn-create-topic").disabled = !online;
     const dot = document.getElementById("server-status-dot");
     const text = document.getElementById("server-status-text");
     if (dot && text) {
       if (online) {
         dot.className = "server-dot online";
-        text.innerText = "Git + SQLite 在线";
+        text.innerText = "本机服务在线";
       } else {
         dot.className = "server-dot offline";
-        text.innerText = "离线预览模式";
+        text.innerText = "离线预览（不可保存）";
       }
     }
   }
@@ -280,6 +288,7 @@
   }
 
   function getCanonicalOutcome(t) {
+    if (typeof t.decision_outcome === "string") return t.decision_outcome;
     if (t.decision_outcome) {
       return t.decision_outcome;
     }
@@ -287,7 +296,7 @@
     if (status.includes("非否决")) return (t.workflow_state || t.lifecycle_status) === "decided" ? "accepted" : "";
     if (status.includes("否决")) return "rejected";
     if (status.includes("已定") || status.includes("采纳")) return "accepted";
-    if (status.includes("推迟") || status.includes("待定")) return "deferred";
+    if (status.includes("推迟") || status.includes("暂缓")) return "deferred";
     if (status.includes("替代")) return "superseded";
     const wf = t.workflow_state || t.lifecycle_status;
     if (wf === "decided") return "accepted";
@@ -303,6 +312,7 @@
       if (state.filters.object !== "all" && t.object !== state.filters.object) {
         return false;
       }
+      if (state.filters.implementation !== "all" && (t.implementation_state || "not_started") !== state.filters.implementation) return false;
       if (state.filters.outcome !== "all") {
         const canonicalOut = getCanonicalOutcome(t);
         if (state.filters.outcome === "rejected") {
@@ -336,8 +346,8 @@
       container.innerHTML = `
         <div style="grid-column: 1/-1; text-align: center; padding: 4rem 1rem; color: var(--text-dim);">
           <div style="font-size: 2.5rem; margin-bottom: 0.8rem;">🔍</div>
-          <h3>未找到匹配的议题</h3>
-          <p style="margin-top: 0.4rem; font-size: 0.85rem;">请尝试调整筛选条件或搜索关键词</p>
+          <h3>${state.topicsMeta.length ? "未找到匹配的议题" : "还没有议题"}</h3>
+          <p style="margin-top: 0.4rem; font-size: 0.85rem;">${state.topicsMeta.length ? "请尝试调整筛选条件或搜索关键词" : "点击右上角“新建议题”开始记录。"}</p>
           <button class="btn btn-secondary" style="margin-top: 1rem;" data-action="reset">重置所有筛选</button>
         </div>
       `;
@@ -351,7 +361,7 @@
       .map((t) => {
         const wf = t.workflow_state || t.lifecycle_status || "discussing";
         const lcInfo = getLifecycleBadge(wf);
-        const rounds = t.rounds_count || 1;
+        const rounds = t.rounds_count ?? 0;
         const ver = t.version || 1;
 
         const isRejected = (getCanonicalOutcome(t) === "rejected");
@@ -360,9 +370,9 @@
         // Implementation Badge
         let implBadge = "";
         if (implState === "verified") {
-          implBadge = `<span class="badge badge-verified" title="已通过自动化测试或人工核验">🧪 已核验</span>`;
+          implBadge = `<span class="badge badge-verified" title="记录为已核验，证据由提交者提供">🧪 已核验</span>`;
         } else if (implState === "implemented") {
-          implBadge = `<span class="badge badge-decided" title="代码已提交落地">🔨 已实现</span>`;
+          implBadge = `<span class="badge badge-decided" title="提交者记录为已实现">🔨 已实现</span>`;
         } else if (implState === "in_progress") {
           implBadge = `<span class="badge badge-in-progress" title="正在开发中">⏳ 进行中</span>`;
         }
@@ -418,7 +428,7 @@
             </div>
             ${t.impl_commit ? `
               <div class="discussion-row" style="font-size: 0.75rem; color: var(--text-dim); border-top: 1px dashed var(--border-subtle); padding-top: 0.3rem;">
-                <span>落地证据代码：</span><code>${escapeHtml(t.impl_commit)}</code>
+                <span>实现提交引用：</span><code>${escapeHtml(t.impl_commit)}</code>
                 ${t.impl_verifier ? `<span> · 核验人: ${escapeHtml(t.impl_verifier)}</span>` : ""}
               </div>
             ` : ""}
@@ -520,9 +530,10 @@
     }
     container.innerHTML = state.settledDecisions.map(item => `
       <div class="card" style="margin-bottom: 1rem; padding: 1rem; border: 1px solid var(--border-color); border-radius: 6px;">
-        <h4 style="margin: 0 0 0.5rem 0; font-size: 1.05rem;">🎯 ${escapeHtml(item.title || "")}</h4>
-        <div style="font-size: 0.95rem; margin-bottom: 0.5rem;"><strong>要求/红线：</strong>${escapeHtml(item.requirement || "")}</div>
-        <div style="font-size: 0.85rem; color: var(--text-dim);"><strong>落实说明：</strong>${escapeHtml(item.details || "")}</div>
+        <h4 style="margin: 0 0 0.5rem 0; font-size: 1.05rem;">${escapeHtml(item.outcome_label || "已决策")} · ${escapeHtml(item.title || "")}</h4>
+        <div style="font-size: 0.95rem; margin-bottom: 0.5rem;"><strong>论述摘要：</strong>${escapeHtml(item.requirement || "")}</div>
+        <div style="font-size: 0.85rem; color: var(--text-dim);"><strong>决策说明：</strong>${escapeHtml(item.details || "")}</div>
+        ${item.topic_ref ? `<button class="btn btn-secondary" data-overview-topic="${escapeHtml(item.topic_ref)}">查看完整议题</button>` : ""}
       </div>
     `).join("");
   }
@@ -539,6 +550,7 @@
         <h4 style="margin: 0 0 0.5rem 0; font-size: 1.05rem;">❓ ${escapeHtml(item.item || "")}</h4>
         <div style="font-size: 0.95rem; margin-bottom: 0.5rem;"><strong>待决难点：</strong>${escapeHtml(item.issue || "")}</div>
         <div style="font-size: 0.85rem; color: var(--text-dim);"><strong>攻坚聚焦点：</strong>${escapeHtml(item.focus || "")}${item.topic_ref ? ` (关联议题: #${escapeHtml(item.topic_ref)})` : ""}</div>
+        ${item.topic_ref ? `<button class="btn btn-secondary" data-overview-topic="${escapeHtml(item.topic_ref)}">查看完整议题</button>` : ""}
       </div>
     `).join("");
   }
@@ -973,7 +985,7 @@
       workflow_state: wf, lifecycle_status: wf, decision_status: decisionStatus,
       decision_outcome: outcome, rejection_reason: draft.rejection_reason.trim(),
       implementation_state: draft.implementation_state, impl_commit: draft.impl_commit.trim(),
-      // The current backend treats omitted fields as empty, so send preserved values.
+      // Carry the metadata the user reviewed with this version.
       impl_verifier: meta.impl_verifier ?? "", superseded_by: meta.superseded_by ?? "",
       new_user_opinion: draft.new_user_opinion.trim(), new_agent_reply: draft.new_agent_reply.trim(),
       commit_message: draft.commit_message.trim(), expected_version: meta.version, request_id: requestId,
@@ -1103,13 +1115,72 @@
     }
   }
 
+  const createFields = ["create-id", "create-title", "create-object", "create-content"];
+
+  function openCreateModal() {
+    if (!state.isServerOnline) return;
+    document.getElementById("modal-create-topic").classList.add("active");
+  }
+
+  async function submitCreate() {
+    if (state.creating || !state.isServerOnline) return;
+    const status = document.getElementById("create-status");
+    const button = document.getElementById("btn-submit-create");
+    if (!state.createRequest) {
+      const [id, title, object, content] = createFields.map(key => document.getElementById(key).value.trim());
+      if (!/^[a-zA-Z0-9_-]{1,128}$/.test(id) || !title) {
+        status.textContent = "请填写有效的议题 ID 和标题。";
+        return;
+      }
+      const requestId = createRequestId();
+      state.createRequest = { id: requestId, body: JSON.stringify({
+        id, title, object: object || "通用系统", content_override: content,
+        workflow_state: "pending", decision_outcome: "", implementation_state: "not_started",
+        commit_message: `创建议题：${title}`, request_id: requestId,
+      }) };
+    }
+    state.creating = true;
+    button.disabled = true;
+    createFields.forEach(id => { document.getElementById(id).disabled = true; });
+    status.textContent = "正在创建…";
+    try {
+      const response = await fetch("/api/topic/create", {
+        method: "POST", headers: { "Content-Type": "application/json", "X-Request-ID": state.createRequest.id },
+        body: state.createRequest.body,
+      });
+      const result = await response.json();
+      if (response.ok && result.status === "success") {
+        state.createRequest = null;
+        createFields.forEach(id => { document.getElementById(id).value = ""; });
+        document.getElementById("modal-create-topic").classList.remove("active");
+        status.textContent = "";
+        showToast(`议题已创建；Git：${result.git_message || result.git_status || "未确认"}`);
+        resetFilters();
+        document.querySelector('.nav-item[data-view="topics"]').click();
+        if (!await loadMetadataList()) showToast("创建已成功，列表刷新失败，请勿重复创建。", "warning");
+      } else if (response.status < 500 && response.status !== 409 && !response.ok) {
+        state.createRequest = null;
+        status.textContent = `创建被拒绝：${result.message || result.error}`;
+      } else {
+        status.textContent = `结果未确认：${result.message || result.error || response.status}。请使用原请求重试；草稿已保留。`;
+      }
+    } catch (error) {
+      status.textContent = `结果未确认：${error.message}。请使用原请求重试；草稿已保留。`;
+    } finally {
+      state.creating = false;
+      button.disabled = false;
+      button.textContent = state.createRequest ? "重试原创建请求" : "创建议题";
+      createFields.forEach(id => { document.getElementById(id).disabled = !!state.createRequest; });
+    }
+  }
+
   // Drafts are tab-local (not written to localStorage). Warn before discarding them.
   window.addEventListener("beforeunload", (event) => {
     if (state.editSession) rememberDraft(state.editSession);
     const dirty = Array.from(state.draftsByTopic.values()).some((session) =>
       session.request || session.conflict || JSON.stringify(session.draft) !== session.initialDraft
     );
-    if (dirty) {
+    if (dirty || state.createRequest || createFields.some(id => document.getElementById(id)?.value.trim())) {
       event.preventDefault();
       event.returnValue = "";
     }
@@ -1167,6 +1238,7 @@
       const data = await res.json();
       const revisions = data.revisions || [];
       const commits = data.commits || [];
+      if (!append) state.historyRevision = data.current_revision;
 
       let revsHtml = "";
       revisions.forEach((r) => {
@@ -1280,7 +1352,7 @@
       }
       const pending = state.pendingRestores[restoreKey];
       const requestId = typeof pending === "object" ? pending.requestId : pending;
-      const effectiveExpectedVersion = (typeof pending === "object" && pending.expectedVersion !== undefined) ? pending.expectedVersion : expectedVersion;
+      const effectiveExpectedVersion = typeof pending === "object" ? pending.expectedVersion : expectedVersion;
 
       const res = await fetch(`${topicPath(topicId)}/restore`, {
         method: "POST",
@@ -1336,12 +1408,17 @@
   // 全库回滚
   async function rollbackRevision(revId) {
     if (!Number.isSafeInteger(Number(revId)) || Number(revId) < 1) return;
-    if (!confirm(`⚠️ 全库恢复至快照 #${revId}？\n此前端补丁未修复后端恢复的一致性问题。请先完整备份，不要在未修复的生产实例上执行。`)) return;
+    const expectedRevision = state.historyRevision;
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) {
+      showToast("请重新打开历史列表后再执行全库恢复", "warning");
+      return;
+    }
+    if (!confirm(`⚠️ 全库恢复至快照 #${revId}？\n这会恢复所有议题，并归档目标快照之外的议题。请确认已备份当前内容。`)) return;
     try {
       const res = await fetch("/api/rollback", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rev_id: revId }),
+        body: JSON.stringify({ rev_id: revId, expected_revision: expectedRevision }),
       });
       const data = await res.json();
       if (res.ok) {
@@ -1369,7 +1446,8 @@
   }
 
   async function copyCitation(title, id) {
-    const text = `[${title}](#${id})`;
+    const label = String(title).replace(/[\r\n]+/g, " ").replace(/[\\\[\]]/g, "\\$&");
+    const text = `[${label}](${location.origin}${location.pathname}#${encodeURIComponent(id)})`;
     try {
       await writeClipboard(text);
       showToast(`已复制引用格式：${text}`);
@@ -1379,6 +1457,7 @@
   }
 
   function closeModal(modalId) {
+    if (modalId === "modal-create-topic" && state.creating) return;
     if (modalId === "modal-edit-decision" && state.editSession) {
       if (state.editSession.saving) {
         showToast("正在确认保存结果，请勿关闭编辑窗口。", "warning");
@@ -1394,10 +1473,27 @@
     document.getElementById(drawerId)?.classList.remove("active");
   }
 
+  async function focusTopic(topicId) {
+    if (!state.topicsMeta.some(topic => topic.id === topicId)) return;
+    document.querySelector('.nav-item[data-view="topics"]').click();
+    resetFilters();
+    const detail = document.getElementById(`detail-body-${topicId}`);
+    if (detail?.style.display === "none") await toggleCard(topicId);
+    document.getElementById(`card-${topicId}`)?.scrollIntoView({ block: "start" });
+  }
+
+  function focusHashTopic() {
+    try { focusTopic(decodeURIComponent(location.hash.slice(1))); } catch (_) { /* malformed URL fragment */ }
+  }
+
+  window.addEventListener("hashchange", focusHashTopic);
+
   function resetFilters() {
     state.filters.lifecycle = "all";
     state.filters.object = "all";
     state.filters.outcome = "all";
+    state.filters.implementation = "all";
+    document.getElementById("implementation-filter").value = "all";
     state.filters.searchQuery = "";
     const searchInput = document.getElementById("search-input");
     if (searchInput) searchInput.value = "";
@@ -1410,6 +1506,16 @@
 
   // Initialization
   document.addEventListener("DOMContentLoaded", () => {
+    for (const id of ["settled-container", "open-container"]) {
+      document.getElementById(id).addEventListener("click", (event) => {
+        const button = event.target.closest("[data-overview-topic]");
+        if (button) focusTopic(button.dataset.overviewTopic);
+      });
+    }
+    document.getElementById("implementation-filter").addEventListener("change", (event) => {
+      state.filters.implementation = event.target.value;
+      renderTopicCards();
+    });
     // Search input
     const searchInput = document.getElementById("search-input");
     if (searchInput) {
@@ -1485,7 +1591,7 @@
     });
 
     // Initial load
-    loadMetadataList();
+    loadMetadataList().then(focusHashTopic);
   });
 
   // Global exports for inline HTML handlers
@@ -1493,6 +1599,8 @@
     toggleCard,
     openEditModal,
     submitDecision,
+    openCreateModal,
+    submitCreate,
     openTimeMachine,
     rollbackRevision,
     restoreSingleTopic,

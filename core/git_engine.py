@@ -11,6 +11,8 @@ from typing import List, Dict, Tuple, Optional, Any
 from dataclasses import dataclass, field
 from core.config import Config
 
+GIT_TIMEOUT = 30
+
 @dataclass
 class GitCommitResult:
     success: bool
@@ -57,9 +59,12 @@ class GitEngine:
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
-                errors="replace"
+                errors="replace",
+                timeout=GIT_TIMEOUT
             )
-            return res.returncode == 0, res.stdout.strip(), res.stderr.strip()
+            return res.returncode == 0, res.stdout, res.stderr.strip()
+        except subprocess.TimeoutExpired:
+            return False, "", "Git 操作超时；请核对提交记录，不要假定已提交或重复执行"
         except Exception as e:
             return False, "", str(e)
 
@@ -92,10 +97,10 @@ class GitEngine:
 
     def get_staged_files(self) -> List[str]:
         """获取当前已在 Git 暂存区中的所有文件相对路径 (POSIX 格式)"""
-        success, out, _ = self.run_git(["diff", "--cached", "--name-only"])
-        if not success or not out:
-            return []
-        return [line.strip().replace("\\", "/") for line in out.splitlines() if line.strip()]
+        success, out, err = self.run_git(["diff", "--cached", "--name-only", "-z"])
+        if not success:
+            raise RuntimeError(f"无法检查 Git 暂存区: {err}")
+        return [name for name in out.split("\0") if name]
 
     def normalize_rel_path(self, path: Path) -> str:
         """将路径转换为相对于仓库根目录的标准 POSIX 字符串"""
@@ -130,7 +135,7 @@ class GitEngine:
             self.last_stage_error = ""
             return True
 
-        success, stdout, stderr = self.run_git(["add", "--"] + rel_paths)
+        success, stdout, stderr = self.run_git(["add", "--"] + [f":(literal){p}" for p in rel_paths])
         self.last_stage_error = (stderr or stdout or "").strip()
         return success
 
@@ -187,7 +192,14 @@ class GitEngine:
         if staged_files:
             target_rel_files = {self.normalize_rel_path(p) for p in staged_files}
 
-        current_staged = self.get_staged_files()
+        if not target_rel_files:
+            return GitCommitResult(success=True, status="clean", commit_hash=self.get_head_hash(),
+                                   message="没有指定台账文件，跳过自动提交")
+
+        try:
+            current_staged = self.get_staged_files()
+        except RuntimeError as e:
+            return GitCommitResult(success=False, status="git_error", message=str(e))
         unrelated_staged = [f for f in current_staged if f not in target_rel_files]
 
         if unrelated_staged:
@@ -202,7 +214,7 @@ class GitEngine:
 
         # 3. 组装 Commit Message
         prefix = git_cfg.get("commit_prefix", "feat(decision)")
-        co_author = git_cfg.get("co_author", "Antigravity <antigravity@google.com>")
+        co_author = git_cfg.get("co_author", "")
 
         header = f"{prefix}: [{lifecycle_badge}] {topic_title} - {summary or '更新决策内容'}"
         body_parts = []
@@ -233,7 +245,10 @@ class GitEngine:
                 )
 
         # 5. 提交前二次安全校验：防止暂存区预检后发生外部并发 git add 竞态 (R10)
-        current_staged = self.get_staged_files()
+        try:
+            current_staged = self.get_staged_files()
+        except RuntimeError as e:
+            return GitCommitResult(success=False, status="git_error", message=str(e))
         unrelated_staged = [f for f in current_staged if f not in target_rel_files]
         if unrelated_staged:
             return GitCommitResult(
@@ -247,7 +262,7 @@ class GitEngine:
         # 6. 执行提交：必须通过 pathspec 显式限定本次提交的文件范围，杜绝夹带任何外界暂存 (R10)
         commit_cmd = ["commit", "-m", commit_msg]
         if target_rel_files:
-            commit_cmd.extend(["--"] + sorted(list(target_rel_files)))
+            commit_cmd.extend(["--"] + [f":(literal){p}" for p in sorted(target_rel_files)])
 
         success, out, err = self.run_git(commit_cmd)
         if success:

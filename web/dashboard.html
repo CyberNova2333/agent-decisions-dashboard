@@ -14,7 +14,7 @@
       <span class="brand-logo" id="brand-logo">AD</span>
       <div class="brand-text">
         <h1 id="brand-title">Agent Decisions Dashboard <span id="brand-icon">⚖️</span></h1>
-        <div class="brand-subtitle" id="brand-subtitle">人机协同决策治理、正交生命周期与不可篡改时间机器台账</div>
+        <div class="brand-subtitle" id="brand-subtitle">本机决策记录、讨论原话与版本追溯</div>
       </div>
     </div>
 
@@ -22,9 +22,10 @@
       <!-- Server Status Badge -->
       <div class="server-status" id="server-status" title="当前数据后端服务状态">
         <span class="server-dot online" id="server-status-dot"></span>
-        <span id="server-status-text">Git + SQLite 在线</span>
+        <span id="server-status-text">正在连接本机服务</span>
       </div>
 
+      <button class="btn btn-primary" id="btn-create-topic" onclick="window.dashboardApp.openCreateModal()" disabled>＋ 新建议题</button>
       <button class="btn btn-secondary" id="btn-agent-context" onclick="window.dashboardApp.openAgentContextModal()" title="导出只读治理 Prompt Markdown">
         <span>🤖</span>
         <span>Agent Context</span>
@@ -103,11 +104,24 @@
           <span class="filter-pill" data-type="outcome" data-val="accepted" style="border-left: 3px solid #10b981;">
             <span>🟢 已采纳</span>
           </span>
+          <span class="filter-pill" data-type="outcome" data-val="deferred"><span>⏳ 推迟再议</span></span>
+          <span class="filter-pill" data-type="outcome" data-val="superseded"><span>📦 已被替代</span></span>
           <span class="filter-pill" data-type="outcome" data-val="rejected" style="border-left: 3px solid #ef4444;">
             <span>❌ 明确否决方案</span>
             <span class="nav-badge" id="pill-count-rejected" style="background: rgba(239,68,68,0.2); color: #ef4444;">0</span>
           </span>
         </div>
+      </div>
+
+      <div class="sidebar-section">
+        <label class="sidebar-heading" for="implementation-filter">实现状态筛选</label>
+        <select class="form-select" id="implementation-filter">
+          <option value="all">全部实现状态</option>
+          <option value="not_started">未开始</option>
+          <option value="in_progress">进行中</option>
+          <option value="implemented">已实现</option>
+          <option value="verified">已核验</option>
+        </select>
       </div>
 
       <!-- Categories Filter -->
@@ -123,7 +137,7 @@
       <div class="content-topbar">
         <div class="search-box">
           <span>🔍</span>
-          <input type="text" id="search-input" placeholder="全局搜索议题标题、正文、否决原因、最新原话或落实说明...">
+          <input type="text" id="search-input" placeholder="搜索议题标题、摘要、否决原因、最新原话或落实说明...">
         </div>
 
         <div style="display: flex; align-items: center; gap: 0.8rem;">
@@ -162,6 +176,39 @@
     </main>
   </div>
 
+  <div class="modal-backdrop" id="modal-create-topic">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>新建议题</h3>
+        <button class="btn-icon" onclick="window.dashboardApp.closeModal('modal-create-topic')">✕</button>
+      </div>
+      <div class="modal-body">
+        <p>创建为“待决策 / 未开始”，之后可追加讨论和结论。</p>
+        <div class="form-group">
+          <label class="form-label" for="create-id">议题 ID（英文、数字、下划线或连字符，创建后固定）</label>
+          <input class="form-input" id="create-id" maxlength="128" placeholder="例如 adr-local-backup">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="create-title">标题</label>
+          <input class="form-input" id="create-title">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="create-object">所属对象（可选）</label>
+          <input class="form-input" id="create-object" placeholder="例如 存储层">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="create-content">核心论述与依据（可选）</label>
+          <textarea class="form-textarea" id="create-content" rows="6"></textarea>
+        </div>
+        <p id="create-status" role="status"></p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="window.dashboardApp.closeModal('modal-create-topic')">关闭并保留草稿</button>
+        <button class="btn btn-primary" id="btn-submit-create" onclick="window.dashboardApp.submitCreate()">创建议题</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Modal: Record Decision & Commit Git -->
   <div class="modal-backdrop" id="modal-edit-decision">
     <div class="modal-card">
@@ -191,6 +238,7 @@
           <div class="form-group">
             <label class="form-label">决策结论 (Outcome)：</label>
             <select class="form-select" id="form-decision-outcome" onchange="window.dashboardApp.onOutcomeChanged()">
+              <option value="">尚无结论</option>
               <option value="accepted">🟢 采纳接受 (Accepted)</option>
               <option value="rejected">❌ 明确否决方案 (Rejected)</option>
               <option value="deferred">⏳ 推迟再议 (Deferred)</option>
@@ -252,7 +300,7 @@
       </div>
       <div class="modal-body">
         <p style="font-size: 0.82rem; color: var(--text-dim); margin-bottom: 0.8rem;">
-          以下是提取自台账的有效决策与已否决红线约束，可直接复制粘贴到 Agent 的 System Prompt 或任务指令中，确保 Agent 严格遵守拍板结论并不再重提已被否决方案。
+          以下是台账中的当前结论、否决原因与讨论记录，可复制到 Agent 的任务上下文。请明确区分当前结论和历史意见，并核对实际执行结果。
         </p>
         <textarea class="form-textarea" id="agent-context-markdown" rows="14" readonly style="font-family: var(--font-mono); font-size: 0.78rem;"></textarea>
       </div>

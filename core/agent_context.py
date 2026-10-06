@@ -4,10 +4,8 @@ Agent Decisions Dashboard - Agent Context & Verification Engine
 面向 Agent 的只读上下文导出、已否决红线约束输出与实现证据核验绑定
 """
 
-import os
-import uuid
-import json
 import datetime
+import json
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from core.config import Config
@@ -81,13 +79,17 @@ class AgentContextEngine:
                 "implementation_state": impl,
                 "impl_commit": t.get("impl_commit", ""),
                 "impl_verifier": t.get("impl_verifier", ""),
+                "content": t.get("content") or "",
+                "discussion": json.loads(t.get("discussion_json") or "[]"),
                 "summary": (t.get("content") or "").split("\n\n")[0].replace("\n", " ")[:200]
             }
 
-            if outcome == "rejected" or "否决" in t.get("decision_status", ""):
+            legacy_status = t.get("decision_status", "")
+            if outcome == "rejected" or (not outcome and "否决" in legacy_status and "非否决" not in legacy_status):
                 item["rejection_reason"] = t.get("rejection_reason", "未记录具体否决原因")
                 item["superseded_by"] = t.get("superseded_by", "")
-                rejected_proposals.append(item)
+                if include_rejected:
+                    rejected_proposals.append(item)
             elif outcome in ["superseded", "deferred"]:
                 # 被替代或已暂缓的议题绝不进入“当前有效决策 (必须遵守)” (R09)
                 pass
@@ -136,10 +138,16 @@ class AgentContextEngine:
             md.append("")
         else:
             for item in context_data["active_decisions"]:
-                impl_info = f"已实现 (提交: `{item['impl_commit']}`)" if item["impl_commit"] else f"实现状态: {item['implementation_state']}"
+                impl_info = f"实现状态: {item['implementation_state']}"
+                if item["impl_commit"]:
+                    impl_info += f" | 提交引用: `{item['impl_commit']}`"
+                if item["impl_verifier"]:
+                    impl_info += f" | 核验者: {item['impl_verifier']}"
                 md.append(f"### [{item['id']}] {item['title']} (v{item['version']})")
                 md.append(f"- **分类**：{item['object']} · {item['function']} | **状态**：{impl_info}")
-                md.append(f"- **核心要求**：{item['summary']}")
+                md.append(f"\n{item.get('content', item['summary'])}")
+                for entry in item.get("discussion", []):
+                    md.append(f"\n**{entry['key']}**\n\n{entry['val']}")
                 md.append("")
 
         md.append("## 2. 明确否决方案与红线 (严禁重提)")
@@ -153,6 +161,9 @@ class AgentContextEngine:
                 md.append(f"- **否决原因**：{item.get('rejection_reason', '用户或团队已明确否决')}")
                 if item.get("superseded_by"):
                     md.append(f"- **替代方案**：请参考议题 `#{item['superseded_by']}`")
+                md.append(item.get("content", ""))
+                for entry in item.get("discussion", []):
+                    md.append(f"\n**{entry['key']}**\n\n{entry['val']}")
                 md.append("")
 
         md.append("## 3. 待落实与待核验清单")
@@ -163,92 +174,25 @@ class AgentContextEngine:
         else:
             for item in context_data["pending_requirements"]:
                 md.append(f"- **[{item['id']}] {item['title']}** (当前: `{item['workflow_state']}` / `{item['implementation_state']}`)")
+                if item not in context_data["active_decisions"]:
+                    md.append(item.get("content", ""))
+                    for entry in item.get("discussion", []):
+                        md.append(f"\n**{entry['key']}**\n\n{entry['val']}")
             md.append("")
 
         return "\n".join(md)
 
     def record_verification(
-        self,
-        topic_id: str,
-        impl_commit: str,
-        verifier: str,
-        test_summary: str = "",
-        mark_verified: bool = True
+        self, topic_id: str, impl_commit: str, verifier: str,
+        test_summary: str = "", mark_verified: bool = True,
+        expected_version: Optional[int] = None, request_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        """
-        P2-E: 关联实现证据到议题台账：
-        明确区分“决策记录提交”与“实现代码提交”，记录实际代码 commit hash、核验人与测试报告
-        """
-        row = self.db.get_topic(topic_id)
-        if not row:
-            raise ValueError(f"未找到议题 [{topic_id}]")
-
-        new_impl_state = "verified" if mark_verified else "implemented"
-        impl_note = f"{verifier}: {test_summary}".strip() if test_summary else verifier
-
-        data = dict(row)
-        data["implementation_state"] = new_impl_state
-        data["impl_status"] = "已核验" if mark_verified else "已实现"
-        data["impl_commit"] = impl_commit
-        data["impl_verifier"] = impl_note
-
-        new_version = self.db.upsert_topic(data)
-
-        # 更新 Markdown Frontmatter (完整保留 section、wf_state 与 outcome)
-        md_file = self.config.decisions_dir / f"{topic_id}.md"
-        parsed = self.parser.parse_markdown_file(md_file)
-        if parsed:
-            section = data.get("section") or parsed.get("section", "未分类")
-            wf_state = data.get("workflow_state") or parsed.get("workflow_state", "decided")
-            badge = "🟢 已决策" if wf_state == "decided" else ("🟡 待决策" if wf_state == "pending" else "🔵 讨论中")
-            updated_md = self.parser.serialize_markdown(
-                topic_id=topic_id,
-                title=parsed["title"],
-                lifecycle_badge=badge,
-                decision_status=data.get("decision_status", "已定"),
-                impl_status=data["impl_status"],
-                priority=parsed.get("priority", "普通"),
-                obj=parsed.get("object", "通用系统"),
-                func=parsed.get("function", "核心规范"),
-                core_content=parsed["core_content"],
-                existing_rounds=parsed["rounds"],
-                workflow_state=wf_state,
-                decision_outcome=data.get("decision_outcome") or parsed.get("decision_outcome", "accepted"),
-                rejection_reason=parsed.get("rejection_reason", ""),
-                superseded_by=parsed.get("superseded_by", ""),
-                implementation_state=new_impl_state,
-                impl_commit=impl_commit,
-                impl_verifier=impl_note,
-                version=new_version,
-                section=section
-            )
-            temp_file = md_file.with_suffix(f".tmp.{uuid.uuid4().hex[:8]}")
-            try:
-                temp_file.write_text(updated_md, encoding="utf-8")
-                os.replace(temp_file, md_file)
-            finally:
-                if temp_file.exists():
-                    try:
-                        temp_file.unlink()
-                    except OSError:
-                        pass
-
-        self.recovery.sync_metadata_json()
-
-        rev = self.db.commit_revision(
-            action_type="VERIFY_IMPLEMENTATION",
-            summary=f"核验实现: [{data['title']}] -> {new_impl_state} (Commit: {impl_commit})",
-            topic_id=topic_id,
-            author=verifier,
-            diff_summary=f"impl_commit={impl_commit}, verifier={impl_note}"
+        """All evidence writes use the same validated, transactional service path."""
+        from core.decision_service import DecisionService
+        service = DecisionService(self.config)
+        service.db = self.db
+        service.recovery = self.recovery
+        return service.record_verification(
+            topic_id, impl_commit, verifier, test_summary, mark_verified,
+            expected_version=expected_version, request_id=request_id
         )
-
-        return {
-            "status": "success",
-            "topic_id": topic_id,
-            "implementation_state": new_impl_state,
-            "impl_commit": impl_commit,
-            "impl_verifier": impl_note,
-            "revision": rev["rev_hash"],
-            "message": f"成功为议题 [{topic_id}] 关联实现代码提交证据 ({impl_commit}) 并标为 {new_impl_state}"
-        }

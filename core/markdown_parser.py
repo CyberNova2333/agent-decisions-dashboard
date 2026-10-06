@@ -10,6 +10,7 @@ import json
 import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
+from core.contracts import canonical_impl_state
 
 
 def is_fence_start(line: str) -> Optional[Tuple[str, int]]:
@@ -272,11 +273,11 @@ class TopicMarkdownParser:
 
             s = line.strip()
             # 过滤模板外框行
-            if s.startswith("# ") and not s.startswith("## "):
+            if skip_header and s.startswith("# ") and not s.startswith("## "):
                 continue
-            if s.startswith("> **锚点") or s.startswith("> **生命周期"):
+            if skip_header and (s.startswith("> **锚点") or s.startswith("> **生命周期")):
                 continue
-            if "## 核心论述与现实依据" in s:
+            if skip_header and s == "## 核心论述与现实依据":
                 skip_header = False
                 continue
             core_lines.append(line)
@@ -329,7 +330,11 @@ class TopicMarkdownParser:
         obj = meta.get("object", "通用系统")
         func = meta.get("function", "核心规范")
         wf_state = meta.get("workflow_state") or meta.get("lifecycle_status", "discussing")
-        dec_status = meta.get("decision_status", "已定")
+        dec_status = meta.get("decision_status", "已定" if wf_state == "decided" else "待定")
+        if "decision_status" not in meta:
+            status_match = re.search(r'\*\*决策状态\*\*[：:]\s*`?([^`|\n]+)`?', core_part)
+            if status_match:
+                dec_status = status_match.group(1).strip()
         impl_state = meta.get("implementation_state") or meta.get("impl_status", "not_started")
         priority = meta.get("priority", "普通")
         version = meta.get("version", 1)
@@ -367,10 +372,12 @@ class TopicMarkdownParser:
             "object": obj,
             "function": func,
             "workflow_state": wf_state,
+            "decision_status": dec_status,
+            "sources": meta.get("sources", ""),
             "decision_outcome": meta.get("decision_outcome", ""),
             "rejection_reason": meta.get("rejection_reason", ""),
             "superseded_by": meta.get("superseded_by", ""),
-            "implementation_state": impl_state,
+            "implementation_state": canonical_impl_state(impl_state),
             "impl_commit": meta.get("impl_commit", ""),
             "impl_verifier": meta.get("impl_verifier", ""),
             "priority": priority,
@@ -491,7 +498,8 @@ class TopicMarkdownParser:
         impl_commit: str = "",
         impl_verifier: str = "",
         version: int = 1,
-        section: str = "未分类"
+        section: str = "未分类",
+        sources: str = ""
     ) -> str:
         """
         序列化生成符合规范的单议题 Markdown：
@@ -511,6 +519,8 @@ class TopicMarkdownParser:
             f'function: {json.dumps(func, ensure_ascii=False)}',
             f'priority: {json.dumps(priority, ensure_ascii=False)}',
             f'workflow_state: {json.dumps(workflow_state, ensure_ascii=False)}',
+            f'decision_status: {json.dumps(decision_status, ensure_ascii=False)}',
+            f'sources: {json.dumps(sources, ensure_ascii=False)}',
             f'decision_outcome: {json.dumps(decision_outcome, ensure_ascii=False)}',
             f'rejection_reason: {json.dumps(rejection_reason, ensure_ascii=False)}',
             f'superseded_by: {json.dumps(superseded_by, ensure_ascii=False)}',

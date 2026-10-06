@@ -177,7 +177,9 @@ class TestAuditInvariants(unittest.TestCase):
 
         def write(p, txt, *args, **kw):
             nonlocal seen
-            if p == self.cfg.metadata_json_path and not seen:
+            meta = self.cfg.metadata_json_path
+            is_export = p == meta or (p.parent == meta.parent and p.name.startswith(f".{meta.name}.") and p.suffix == ".tmp")
+            if is_export and not seen:
                 seen = True
                 real(p, '{"topics": [', encoding="utf-8")
                 raise OSError("injected partial JSON write / disk full")
@@ -185,6 +187,7 @@ class TestAuditInvariants(unittest.TestCase):
 
         with patch.object(Path, "write_text", write):
             r = self.error(lambda: self.s.rollback_full(target))
+        self.assertTrue(seen, "Fault injection must reach the metadata writer")
         after = self.state()
         self.assertEqual(after, before, "Full rollback restores DB and Markdown, but leaves metadata.json truncated")
 

@@ -10,6 +10,7 @@ import shutil
 from pathlib import Path
 from core.git_engine import GitEngine, GitCommitResult
 from core.config import Config
+from unittest.mock import patch
 
 class TestGitEngine(unittest.TestCase):
     def setUp(self):
@@ -38,6 +39,40 @@ class TestGitEngine(unittest.TestCase):
         head = self.engine.get_head_hash(short=True)
         self.assertNotEqual(head, "none")
         self.assertEqual(len(head), 7)
+
+    def test_literal_paths_do_not_stage_glob_matches(self):
+        intended = self.repo_dir / "decisions[private]" / "a.md"
+        unrelated = self.repo_dir / "decisionsp" / "a.md"
+        for path in (intended, unrelated):
+            path.parent.mkdir()
+            path.write_text("private record", encoding="utf-8")
+        result = self.engine.commit_decision("Title", "badge", "save", staged_files=[intended])
+        self.assertEqual(result.status, "committed")
+        files = subprocess.run(["git", "show", "--pretty=format:", "--name-only", "HEAD"],
+                               cwd=self.repo_dir, capture_output=True, check=True, text=True).stdout.splitlines()
+        self.assertIn("decisions[private]/a.md", files)
+        self.assertNotIn("decisionsp/a.md", files)
+        self.assertNotIn("decisionsp/a.md", self.engine.get_staged_files())
+
+    def test_unicode_staged_target_is_recognized(self):
+        target = self.repo_dir / "决策.md"
+        target.write_text("discussion", encoding="utf-8")
+        subprocess.run(["git", "add", "--", target.name], cwd=self.repo_dir, capture_output=True, check=True)
+        self.assertIn(target.name, self.engine.get_staged_files())
+        self.assertEqual(self.engine.commit_decision("Title", "badge", "save", staged_files=[target]).status, "committed")
+
+    def test_empty_target_list_never_commits_late_staged_work(self):
+        unrelated = self.repo_dir / "user.py"
+        unrelated.write_text("secret = 42", encoding="utf-8")
+        head = self.engine.get_head_hash()
+        run_git = self.engine.run_git
+        def run(args):
+            if args[0] == "commit":
+                subprocess.run(["git", "add", "user.py"], cwd=self.repo_dir, capture_output=True, check=True)
+            return run_git(args)
+        with patch.object(self.engine, "run_git", side_effect=run):
+            self.engine.commit_decision("Title", "badge", "empty targets", staged_files=[])
+        self.assertEqual(self.engine.get_head_hash(), head)
 
     def test_staging_isolation_unrelated_files_preserved(self):
         """

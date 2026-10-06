@@ -7,6 +7,6 @@ echo ========================================================
 echo   Agent Decisions Dashboard: 决策台账服务启动中...
 echo ========================================================
 echo.
-python -m core.server
+python -m core.server %*
 
 pause

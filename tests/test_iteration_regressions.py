@@ -156,7 +156,9 @@ class TestIterationRegressions(unittest.TestCase):
             try:
                 outcomes[who] = {
                     "status": "success",
-                    "result": self.s.save_topic("a", {"title": "Winner " + who, "new_user_opinion": "Operation " + who}, expected_version=1, request_id="concurrent-" + who)
+                    # Deliberately bypass admission to keep testing the underlying
+                    # SQLite CAS/compensation path against an external race.
+                    "result": DecisionService.save_topic.__wrapped__(self.s, "a", {"title": "Winner " + who, "new_user_opinion": "Operation " + who}, expected_version=1, request_id="concurrent-" + who)
                 }
             except Exception as e:
                 outcomes[who] = {"status": type(e).__name__, "error": str(e)}
