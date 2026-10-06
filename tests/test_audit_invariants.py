@@ -578,6 +578,51 @@ with patch.object(s.db, 'commit_revision', side_effect=lambda **kw: os._exit(86)
         undo = self.error(lambda: self.s.restore_single_topic("a", res["prior_rev_id"], expected_version=res["new_version"], request_id="undo-external"))
         self.assertIn("Corrected authoritative discussion", doc.read_text(encoding="utf-8"))
 
+    def test_R15_distinct_prefix_request_ids_need_distinct_audits(self):
+        row = self.s.db.get_topic("a")
+        a = self.s.save_topic("a", self.data(content_override="First independent operation"), expected_version=row["version"] if row else None, request_id="request-10")
+        before_revs = self.s.db.get_revisions(1000)
+        row = self.s.db.get_topic("a")
+        b = self.s.save_topic("a", self.data(content_override="Second independent operation"), expected_version=row["version"] if row else None, request_id="request-1")
+        after_revs = self.s.db.get_revisions(1000)
+        self.assertGreater(len(after_revs), len(before_revs))
+
+    def test_R16_undo_keeps_external_removal_of_all_discussion(self):
+        self.s.save_topic("a", self.data(new_user_opinion="Obsolete discussion"), expected_version=None, request_id="old")
+        doc = self.doc("a")
+        doc.write_text(doc.read_text(encoding="utf-8").split("## 历史讨论与决策记录")[0] + "## 历史讨论与决策记录\n", encoding="utf-8")
+        row = self.s.db.get_topic("a")
+        saved = self.s.save_topic("a", self.data(new_user_opinion="Mistaken addition"), expected_version=row["version"], request_id="new")
+        undo = self.error(lambda: self.s.restore_single_topic("a", saved["prior_rev_id"], expected_version=saved["new_version"], request_id="undo-all-removed"))
+        self.assertNotIn("exception", undo)
+        self.assertNotIn("Obsolete discussion", doc.read_text(encoding="utf-8"))
+
+    def test_R17_optional_version_retry_before_file_replace(self):
+        self.save()
+        body = self.data(content_override="Change")
+        args = {"request_id": "omit-ver", "expected_version": None}
+        with patch.object(self.s, "_atomic_replace", side_effect=OSError("injected once before file replacement")):
+            first = self.error(lambda: self.s.save_topic("a", body, **args))
+        self.assertIn("exception", first)
+        retry = self.error(lambda: self.s.save_topic("a", body, **args))
+        self.assertNotIn("exception", retry)
+
+    def test_R18_english_markdown_headings_and_labels_preserved(self):
+        self.s.save_topic("a", self.data(new_user_opinion="User evidence", new_agent_reply="Agent evidence", commit_message="Change evidence"), expected_version=None)
+        doc = self.doc("a")
+        text = doc.read_text(encoding="utf-8")
+        for old, new in [
+            ("## 历史讨论与决策记录", "## Discussion history"),
+            ("💡 用户意见（最新原话）", "User opinion"),
+            ("🤖 团队答复（落实说明）", "Agent reply"),
+            ("变更说明", "Change summary"),
+        ]:
+            text = text.replace(old, new)
+        doc.write_text(text, encoding="utf-8")
+        parsed = self.s.parser.parse_markdown_file(doc)
+        self.assertEqual(len(parsed["rounds"]), 1)
+        self.assertEqual(parsed["rounds"][0]["user_opinion"], "User evidence")
+
 
 if __name__ == "__main__":
     unittest.main()
