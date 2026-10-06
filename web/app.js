@@ -592,8 +592,10 @@
         titleEl.setAttribute("data-default-title", titleEl.textContent.trim());
       }
       const defaultTitle = titleEl.getAttribute("data-default-title");
-      if (isEn || !defaultTitle.includes("确定决策")) {
+      if (defaultTitle && defaultTitle !== "✏️ 确定决策并提交 Git") {
         titleEl.textContent = `${defaultTitle}: ${meta.title}`;
+      } else if (isEn) {
+        titleEl.textContent = `Record decision: ${meta.title}`;
       } else {
         titleEl.textContent = `确定决策: ${meta.title}`;
       }
@@ -626,7 +628,7 @@
         agentRepEl.setAttribute("data-default-placeholder", agentRepEl.placeholder || "");
       }
       const origPlaceholder = agentRepEl.getAttribute("data-default-placeholder");
-      if (origPlaceholder && origPlaceholder !== "输入第 n 轮的落实说明与排期...") {
+      if (origPlaceholder && origPlaceholder !== "录入团队技术回应与落地承诺..." && origPlaceholder !== "输入第 n 轮的落实说明与排期...") {
         agentRepEl.placeholder = origPlaceholder;
       } else if (isEn) {
         agentRepEl.placeholder = `Enter round ${nextRound} agent reply and schedule...`;
@@ -644,17 +646,12 @@
     }
     const iconSpan = button.querySelector("[data-save-icon]");
     if (iconSpan) {
-      let foundText = false;
-      for (const child of button.childNodes) {
-        if (child !== iconSpan && child.nodeType === Node.TEXT_NODE) {
-          child.nodeValue = " " + text;
-          foundText = true;
-          break;
+      for (const child of Array.from(button.childNodes)) {
+        if (child !== iconSpan) {
+          button.removeChild(child);
         }
       }
-      if (!foundText) {
-        button.appendChild(document.createTextNode(" " + text));
-      }
+      button.appendChild(document.createTextNode(" " + text));
       return;
     }
     button.textContent = text;
@@ -667,7 +664,18 @@
     const isEn = document.documentElement.lang?.toLowerCase().startsWith("en");
     if (!button.hasAttribute("data-default-text")) {
       const labelEl = button.querySelector("[data-save-label]");
-      const initialText = labelEl ? labelEl.textContent.trim() : button.textContent.trim();
+      const iconEl = button.querySelector("[data-save-icon]");
+      let initialText = "";
+      if (labelEl) {
+        initialText = labelEl.textContent.trim();
+      } else if (iconEl) {
+        initialText = Array.from(button.childNodes)
+          .filter(n => n !== iconEl)
+          .map(n => n.textContent)
+          .join("").trim();
+      } else {
+        initialText = button.textContent.trim();
+      }
       button.setAttribute("data-default-text", initialText || (isEn ? "Save decision" : "确定决策并生成 Git Commit"));
     }
     const defaultText = button.getAttribute("data-default-text");

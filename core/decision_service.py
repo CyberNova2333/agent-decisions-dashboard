@@ -43,8 +43,17 @@ def _parse_diff_fields(diff_summary: Optional[str]) -> Dict[str, str]:
     if reason is not None:
         fields["reason"] = reason
 
+    # request_id 可能包含任意字符（包括逗号与分号，如 request-1,phase=save），
+    # 在 diff_summary 中 request_id 位于原因之前或末尾，提取时必须完整保留 (R3, N04)
+    req_m = re.search(r"(?:^|[\s,;])request_id=(.*)$", text)
+    if req_m:
+        fields["request_id"] = req_m.group(1).strip()
+        text = text[:req_m.start()].rstrip(" ,;")
+
     for part in text.split(","):
         part = part.strip()
+        if not part:
+            continue
         if "=" in part:
             k, v = part.split("=", 1)
             fields[k.strip()] = v.strip()
@@ -507,13 +516,45 @@ class DecisionService:
                         existing_rev = r
                         break
 
-        if commit_msg and not db_already_updated and not existing_rev:
+        if commit_msg:
+            scope_str = f"[{title}](#{topic_id})"
+            change_str = f"{commit_msg} [{lifecycle_badge}]"
             basis_str = f"用户指示: {user_opinion[:25]}..." if user_opinion else "用户明确决策"
-            self.db.record_changelog(
-                scope=f"[{title}](#{topic_id})",
-                change=f"{commit_msg} [{lifecycle_badge}]",
-                basis=basis_str
-            )
+
+            changelog_already_recorded = False
+            if existing_rev:
+                changelog_already_recorded = True
+            else:
+                # 检查该日志是否在上一次尝试中已写入 changelog (N05, N06, N10, B06)
+                with self.db.get_connection() as conn:
+                    cursor = conn.cursor()
+                    rows = cursor.execute(
+                        "SELECT id FROM changelog WHERE scope = ? AND change = ? AND basis = ?",
+                        (scope_str, change_str, basis_str)
+                    ).fetchall()
+                    if rows:
+                        base_count = 0
+                        if prior_rev_id:
+                            for br in self.db.get_revisions(limit=20, topic_id=topic_id):
+                                if br["rev_id"] == prior_rev_id:
+                                    try:
+                                        snap = json.loads(br["snapshot_json"])
+                                        base_count = sum(
+                                            1 for c in snap.get("changelog", [])
+                                            if c.get("scope") == scope_str and c.get("change") == change_str and c.get("basis") == basis_str
+                                        )
+                                    except Exception:
+                                        base_count = 0
+                                    break
+                        if len(rows) > base_count:
+                            changelog_already_recorded = True
+
+            if not changelog_already_recorded:
+                self.db.record_changelog(
+                    scope=scope_str,
+                    change=change_str,
+                    basis=basis_str
+                )
 
         if existing_rev:
             rev_info = {"rev_id": existing_rev["rev_id"], "rev_hash": existing_rev["rev_hash"]}

@@ -417,32 +417,50 @@ class TopicMarkdownParser:
                 continue
 
             # 围栏之外检测字段标头
-            user_m = re.match(r"^-\s+\*\*.*?(?:用户(?:意见)?|user\s*opinion).*?\*\*[：:]?[ \t]*(.*)", line, re.IGNORECASE)
-            agent_m = re.match(r"^-\s+\*\*.*?(?:答复|落实|agent\s*reply|team\s*reply).*?\*\*[：:]?[ \t]*(.*)", line, re.IGNORECASE)
-            commit_m = re.match(r"^-\s+\*\*.*?(?:变更说明|change\s*summary).*?\*\*[：:]?[ \t]*(.*)", line, re.IGNORECASE)
+            # 必须精准匹配协议支持的完整字段标头，严禁将包含标头单词的普通列表项（如 - **Team reply SLA**: 或 - **User opinion survey**:）误判为协议字段 (R1, N01, N03)
+            bullet_m = re.match(r"^-\s+\*\*(.*?)\*\*[：:]?[ \t]*(.*)", line)
+            if bullet_m:
+                label_text = bullet_m.group(1).strip()
+                rest_text = bullet_m.group(2).strip()
 
-            if user_m:
-                current_target = "user"
-                rest = user_m.group(1).strip()
-                if rest:
-                    user_lines.append(rest)
-            elif agent_m:
-                current_target = "agent"
-                rest = agent_m.group(1).strip()
-                if rest:
-                    agent_lines.append(rest)
-            elif commit_m:
-                current_target = "commit"
-                rest = commit_m.group(1).strip()
-                if rest:
-                    commit_lines.append(rest)
-            else:
-                if current_target == "user":
-                    user_lines.append(line)
-                elif current_target == "agent":
-                    agent_lines.append(line)
-                elif current_target == "commit":
-                    commit_lines.append(line)
+                user_label_m = re.match(
+                    r"^(?:💡\s*)?(?:用户(?:意见)?|user\s*opinion)(?:\s*[（(][^）)]*[）)])?$",
+                    label_text,
+                    re.IGNORECASE
+                )
+                agent_label_m = re.match(
+                    r"^(?:🤖\s*)?(?:团队答复|团队回复|落实说明|答复|落实|(?:team|agent)\s*reply)(?:\s*[（(][^）)]*[）)])?$",
+                    label_text,
+                    re.IGNORECASE
+                )
+                commit_label_m = re.match(
+                    r"^(?:变更说明|change\s*summary)(?:\s*[（(][^）)]*[）)])?$",
+                    label_text,
+                    re.IGNORECASE
+                )
+
+                if user_label_m:
+                    current_target = "user"
+                    if rest_text:
+                        user_lines.append(rest_text)
+                    continue
+                elif agent_label_m:
+                    current_target = "agent"
+                    if rest_text:
+                        agent_lines.append(rest_text)
+                    continue
+                elif commit_label_m:
+                    current_target = "commit"
+                    if rest_text:
+                        commit_lines.append(rest_text)
+                    continue
+
+            if current_target == "user":
+                user_lines.append(line)
+            elif current_target == "agent":
+                agent_lines.append(line)
+            elif current_target == "commit":
+                commit_lines.append(line)
 
         return {
             "title": title,
