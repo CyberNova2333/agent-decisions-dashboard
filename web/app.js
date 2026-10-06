@@ -93,6 +93,9 @@
         state.isServerOnline = true;
         updateServerStatus(true);
         renderTopicCards();
+        renderSettledDecisions();
+        renderOpenQuestions();
+        renderChangelog();
         updateSidebarCounts();
         return true;
       }
@@ -111,6 +114,9 @@
       if (def.config) applyConfig(def.config);
       updateServerStatus(false);
       renderTopicCards();
+      renderSettledDecisions();
+      renderOpenQuestions();
+      renderChangelog();
       updateSidebarCounts();
     }
     return false;
@@ -505,6 +511,57 @@
     document.getElementById("count-changelog").innerText = state.changelog.length;
   }
 
+  function renderSettledDecisions() {
+    const container = document.getElementById("settled-container");
+    if (!container) return;
+    if (!state.settledDecisions.length) {
+      container.innerHTML = `<div style="color: var(--text-dim); padding: 1.5rem; text-align: center;">暂无已定结论记录</div>`;
+      return;
+    }
+    container.innerHTML = state.settledDecisions.map(item => `
+      <div class="card" style="margin-bottom: 1rem; padding: 1rem; border: 1px solid var(--border-color); border-radius: 6px;">
+        <h4 style="margin: 0 0 0.5rem 0; font-size: 1.05rem;">🎯 ${escapeHtml(item.title || "")}</h4>
+        <div style="font-size: 0.95rem; margin-bottom: 0.5rem;"><strong>要求/红线：</strong>${escapeHtml(item.requirement || "")}</div>
+        <div style="font-size: 0.85rem; color: var(--text-dim);"><strong>落实说明：</strong>${escapeHtml(item.details || "")}</div>
+      </div>
+    `).join("");
+  }
+
+  function renderOpenQuestions() {
+    const container = document.getElementById("open-container");
+    if (!container) return;
+    if (!state.openQuestions.length) {
+      container.innerHTML = `<div style="color: var(--text-dim); padding: 1.5rem; text-align: center;">暂无待决策议题</div>`;
+      return;
+    }
+    container.innerHTML = state.openQuestions.map(item => `
+      <div class="card" style="margin-bottom: 1rem; padding: 1rem; border: 1px solid var(--border-color); border-radius: 6px;">
+        <h4 style="margin: 0 0 0.5rem 0; font-size: 1.05rem;">❓ ${escapeHtml(item.item || "")}</h4>
+        <div style="font-size: 0.95rem; margin-bottom: 0.5rem;"><strong>待决难点：</strong>${escapeHtml(item.issue || "")}</div>
+        <div style="font-size: 0.85rem; color: var(--text-dim);"><strong>攻坚聚焦点：</strong>${escapeHtml(item.focus || "")}${item.topic_ref ? ` (关联议题: #${escapeHtml(item.topic_ref)})` : ""}</div>
+      </div>
+    `).join("");
+  }
+
+  function renderChangelog() {
+    const container = document.getElementById("changelog-container");
+    if (!container) return;
+    if (!state.changelog.length) {
+      container.innerHTML = `<div style="color: var(--text-dim); padding: 1.5rem; text-align: center;">暂无变更审计日志</div>`;
+      return;
+    }
+    container.innerHTML = state.changelog.map(item => `
+      <div class="card" style="margin-bottom: 0.75rem; padding: 0.75rem 1rem; border: 1px solid var(--border-color); border-radius: 6px;">
+        <div style="display: flex; justify-content: space-between; font-size: 0.85rem; color: var(--text-dim); margin-bottom: 0.25rem;">
+          <span><strong>范围：</strong>${escapeHtml(item.scope || "")}</span>
+          <span>${escapeHtml(item.date || "")}</span>
+        </div>
+        <div style="font-size: 0.95rem; margin-bottom: 0.25rem;"><strong>变更：</strong>${escapeHtml(item.change || "")}</div>
+        <div style="font-size: 0.85rem; color: var(--text-dim);"><strong>依据：</strong>${escapeHtml(item.basis || "")}</div>
+      </div>
+    `).join("");
+  }
+
   function bindFilterPills(container) {
     container.querySelectorAll(".filter-pill").forEach((pill) => {
       pill.addEventListener("click", () => {
@@ -646,12 +703,13 @@
     }
     const iconSpan = button.querySelector("[data-save-icon]");
     if (iconSpan) {
-      for (const child of Array.from(button.childNodes)) {
+      const parent = iconSpan.parentNode;
+      for (const child of Array.from(parent.childNodes)) {
         if (child !== iconSpan) {
-          button.removeChild(child);
+          parent.removeChild(child);
         }
       }
-      button.appendChild(document.createTextNode(" " + text));
+      parent.appendChild(document.createTextNode(" " + text));
       return;
     }
     button.textContent = text;
@@ -669,7 +727,8 @@
       if (labelEl) {
         initialText = labelEl.textContent.trim();
       } else if (iconEl) {
-        initialText = Array.from(button.childNodes)
+        const parent = iconEl.parentNode;
+        initialText = Array.from(parent.childNodes)
           .filter(n => n !== iconEl)
           .map(n => n.textContent)
           .join("").trim();
@@ -1385,7 +1444,12 @@
         const view = item.getAttribute("data-view");
         document.querySelectorAll(".view-panel").forEach((p) => (p.style.display = "none"));
         const targetPanel = document.getElementById(`view-${view}`);
-        if (targetPanel) targetPanel.style.display = "block";
+        if (targetPanel) {
+          targetPanel.style.display = "block";
+          if (view === "settled") renderSettledDecisions();
+          else if (view === "open") renderOpenQuestions();
+          else if (view === "changelog") renderChangelog();
+        }
       });
     });
 

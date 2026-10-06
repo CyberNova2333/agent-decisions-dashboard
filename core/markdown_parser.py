@@ -310,8 +310,8 @@ class TopicMarkdownParser:
 
                 s = line.strip()
                 # 只有符合轮次标题模式（例如 '### 第 1 轮...' 或 '### Round 1...'）才作为新轮次分界
-                # 普通的 ### Subheading （如用户意见内的 ### Implementation notes）保留在轮次内部
-                if re.match(r"^###\s+(?:第\s*\d+\s*轮.*|Round\s*\d+.*)", s, re.I):
+                # 普通的 ### Subheading （如用户意见内的 ### Implementation notes 或 ### Round 2 retry policy）保留在轮次内部 (T06)
+                if re.match(r"^###\s+(?:第\s*\d+\s*轮.*|Round\s*\d+\s*(?:[:(]|[-–—]|\bdecisions?\b|\brequirements?\b|\bdiscussion\b|\brecord\b|\bnotes?\b|$).*)", s, re.I):
                     if current_round_title is not None:
                         rounds.append(cls._build_round_dict(current_round_title, current_round_lines))
                     # 去掉前导 '### '
@@ -424,17 +424,17 @@ class TopicMarkdownParser:
                 rest_text = bullet_m.group(2).strip()
 
                 user_label_m = re.match(
-                    r"^(?:💡\s*)?(?:用户(?:意见)?|user\s*opinion)(?:\s*[（(][^）)]*[）)])?$",
+                    r"^(?:💡\s*)?(?:用户(?:意见)?|user\s*opinion)(?:\s*[（(]\s*(?:最新原话|latest\s*(?:verbatim|opinion|requirements?))\s*[）)])?$",
                     label_text,
                     re.IGNORECASE
                 )
                 agent_label_m = re.match(
-                    r"^(?:🤖\s*)?(?:团队答复|团队回复|落实说明|答复|落实|(?:team|agent)\s*reply)(?:\s*[（(][^）)]*[）)])?$",
+                    r"^(?:🤖\s*)?(?:团队答复|团队回复|落实说明|答复|落实|(?:team|agent)\s*reply)(?:\s*[（(]\s*(?:落实说明|implementation\s*(?:details|notes?)|schedule)\s*[）)])?$",
                     label_text,
                     re.IGNORECASE
                 )
                 commit_label_m = re.match(
-                    r"^(?:变更说明|change\s*summary)(?:\s*[（(][^）)]*[）)])?$",
+                    r"^(?:变更说明|change\s*summary)(?:\s*[（(]\s*(?:简要|变更说明|summary)\s*[）)])?$",
                     label_text,
                     re.IGNORECASE
                 )
