@@ -1,333 +1,372 @@
 # Agent Decisions Dashboard ⚖️
 
-> **通用 AI Agent 结对编程架构决策台账与 Git 自动化治理看板**  
-> *Human-Agent Collaborative Architecture Decision Ledger & Automated Governance Dashboard*
+面向个人与本机 Agent 协作的决策台账：保留讨论原话、记录当前结论、跟踪实现状态，并通过版本历史追溯修改。
 
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Python: 3.9+](https://img.shields.io/badge/Python-3.9%2B-brightgreen.svg)](https://python.org)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](./LICENSE)
+[![Python: 3.9+](https://img.shields.io/badge/Python-3.9%2B-brightgreen.svg)](./pyproject.toml)
 ![Python runtime: Standard Library](https://img.shields.io/badge/Python_Runtime-Standard_Library-orange.svg)
 [![Tests: unittest](https://img.shields.io/badge/Tests-unittest-blue.svg)](./tests/)
 
-在人类与 AI 智能体（Agent）进行长程、复杂的工程研发与协同编码时，传统的大文档容易发生**“历史结论被冲刷覆盖”、“多轮答复无法精确定位追溯”、“AI 重复提出已被明确否决的旧提案”、“代码已拍板但无法区分实现与决策”**等痛点。
+Python 服务仅使用标准库，界面是静态 HTML/CSS/JavaScript；Mermaid 图表库随项目提供，无需前端构建、npm 安装或运行时访问 CDN。项目按源码目录或 Python 包组织，不是单文件可执行程序。
 
-`agent-decisions-dashboard` 是面向个人与本机 Agent 协作的轻量决策台账：记录讨论原话、当前结论、实现状态和验证证据，并提供可追溯的版本历史。Python 标准库服务配合静态 HTML/JavaScript，无需前端构建或云服务。
+适用范围是本机记录与追溯。不提供账号权限、多人远程协作、任务排期或自动执行 Agent；上下文需要调用者主动读取，导出文档不能保证 Agent 遵守结论。
 
-它适合回答“为什么这样决定、哪些方案已否决、哪些要求尚未落实”。项目范围是本机记录与追溯，不含账号权限、多人远程协作、任务排期或自动执行 Agent。导出的上下文需要调用者主动读取；看板不能保证 Agent 遵守结论。
+## 当前功能
 
-## 当前可用功能
-
-| 使用环节 | 实际行为 |
+| 功能 | 当前行为 |
 |---|---|
-| 新建 | 页面“新建议题”填写 ID、标题、可选所属对象和正文，创建为待决策、尚无结论、未开始 |
-| 讨论与决策 | 追加多行原话和答复；可修改最近一轮，旧内容留在版本历史；支持“部分同意”，需说明同意范围；否决必须有原因 |
-| 查看 | 工作流、结论、实现状态及业务对象筛选；搜索标题、摘要、否决原因和最新答复；单项或批量展开/收起当前筛选下的议题；刷新最新状态 |
-| Markdown | 保留单次换行；支持表格、标题、列表、引用、代码围栏与安全链接；本地按需绘制 Mermaid 流程图 |
-| 概览 | “已定结论”从当前已决策且未暂缓/替代的议题生成，明确标示否决；“待决策”对应 pending 议题 |
-| 引用 | 复制带完整本机 URL 的议题链接；链接打开后定位并展开议题 |
-| 外观 | 默认粉白配色；顶栏可选樱粉、蓝、紫、青绿或琥珀，独立切换深浅模式；当前浏览器记住选择，主按钮统一使用白字 |
-| 追溯 | 单议题恢复、撤销创建、全库快照恢复；Git 提交状态独立反馈 |
-| Agent 与维护 | AGENTS.md 与可选只读检查钩子、完整上下文导出、人工核验证据登记、一致性检查、索引重建、SQLite 在线备份 |
+| 新建议题 | 填写 ID、标题、可选所属对象和正文；页面创建为“待决策／尚无结论／未开始” |
+| 记录决策 | 追加多行用户意见和团队答复，分别设置工作流、决策结论与实现状态 |
+| **部分同意** | 独立结论 `partially_accepted`；切换为此结论时需填写用户意见，说明同意和保留的范围；卡片、筛选和概览单独标示 |
+| 修改本轮 | 修改最近一轮已提交回复，保留修改前的版本；不增加讨论轮数，更早轮次只读 |
+| 查找与展开 | 按工作流、结论、实现状态和业务对象筛选；搜索 ID、标题、摘要、否决原因和最近有内容的答复；展开／收起当前筛选下的全部议题 |
+| 保存后定位 | 刷新状态和详情缓存，保持刚保存的议题展开并定位；若不再符合原筛选条件，会提示并清除筛选以显示目标 |
+| Markdown 与图表 | 表格、多行文本、标题、列表、引用、代码围栏、安全链接和本地 Mermaid 渲染 |
+| 历史与恢复 | 查看快照、恢复单议题、撤销创建或恢复全库快照；台账保存与 Git 提交分别反馈 |
+| 外观 | 默认粉白配色；樱粉、蓝、紫、青绿、琥珀五种主题色，独立切换深浅模式；主按钮使用白字 |
+| Agent 与维护 | 完整上下文导出、可选只读检查钩子、实现证据登记、一致性检查、索引重建与 SQLite 在线备份 |
 
-页面编辑器用于追加讨论、修改最近一轮和更新状态；更早轮次保持只读，可在新一轮追加更正。已有议题的标题、正文和分类修改使用保存 API 或编辑权威 Markdown 后核对并重建索引。直接修改文件不会自动覆盖索引；“刷新”会检查并提示不同步。页面保留编辑草稿，保存后刷新列表并使旧详情缓存失效，保持刚保存的议题展开并定位；如果状态变更后不再符合原筛选条件，会提示并清除筛选以显示该议题。
+## 快速上手
 
-Markdown 是安全的有限格式渲染器，不支持原始 HTML、完整 CommonMark 或任意插件。议题链接可写 `[议题名](#topic-id)` 或 `[议题名](decisions/topic-id.md)`；外部链接仅支持 HTTP(S)。流程图使用 `mermaid` 代码围栏，例如 `flowchart LR` 开头的图。Mermaid 12.1.0 已随项目提供本地资源，仅在图表可见时加载，使用严格模式；不执行图表配置指令，不加载图表外部图片，语法错误时保留源码并显示原因。大型图表限制为 50,000 字符、500 条边。
+### 环境与启动
 
-离线初次打开显示明确标识的示例数据，不是已保存项目的离线副本。
+- Python 3.9 及以上。下文使用 `python`；Linux/macOS 若命令名为 `python3`，相应替换。
+- Git 仅自动提交功能需要；先准备仓库与提交身份，也可关闭该功能。
+- 使用现代浏览器。Node 仅用于运行前端测试，不是启动看板的前提。
 
----
+在本仓库根目录运行：
 
-## 🏛️ 系统架构与职责边界
+```sh
+python -m core.server --port 8765
+```
 
-业务入口、存储与页面之间的关系：
+服务默认打开浏览器；访问 `http://127.0.0.1:8765/dashboard.html`，不希望自动打开时加 `--no-browser`。也可双击 Windows 的 [start_dashboard.bat](./start_dashboard.bat)，或在 Linux/macOS 运行 `bash start_dashboard.sh`。两个脚本均切换到源码目录，并透传命令行参数。
+
+### 接入已有数据项目
+
+在数据项目准备 `dashboard.config.json`，再从本仓库根目录启动：
+
+```sh
+python -m core.server --config "D:/MyProject/dashboard.config.json" --no-browser
+```
+
+相对数据路径和 Git 操作目录以配置文件所在目录为基准，无需把服务源码复制进数据项目。同一数据目录只运行一个服务实例；修改后端源码或配置后需要重启，界面代码更新后重新加载页面。重载前先保存或另行备份标签页中的草稿。
+
+未指定 `--config` 时，读取当前工作目录的 `dashboard.config.json`；默认文件不存在则采用内置值。显式指定的文件不存在、JSON 无效或根节点不是对象时，启动会失败。
+
+| 配置项 | 内置默认值与用途 |
+|---|---|
+| `project_name` / `project_subtitle` | 项目标题与副标题 |
+| `brand_logo` / `brand_icon` | 顶栏文字标识与图标 |
+| `host` / `port` | `127.0.0.1` / `8765`；命令行覆盖环境变量，环境变量覆盖文件配置 |
+| `decisions_dir` | `decisions`，权威 Markdown 文件 |
+| `database_path` | `decisions.db`，当前索引、历史快照与请求回执 |
+| `metadata_json_path` | `decisions/metadata.json`，派生摘要 |
+| `git_commit.enabled` | `true`；设为 `false` 时只保存台账，不自动提交 Git |
+| `git_commit.commit_prefix` / `co_author` | 自动提交前缀 / 协作署名；署名默认留空 |
+| `git_commit.include_user_opinion` / `include_agent_reply` | 默认均为 `true`，控制是否将本次原话／答复写入 Git 提交说明 |
+| `categories.objects` | 业务对象筛选列表；`categories.functions` 保留分类配置，当前页面没有业务功能筛选器 |
+| `lifecycle_states` | 三种工作流状态的展示文字与徽章；不能通过配置增加后端支持的状态枚举 |
+
+环境变量为 `AGENT_DASHBOARD_HOST`、`AGENT_DASHBOARD_PORT`。旧配置项 `doc_data_json_path` 不作为当前保存或导入入口。完整默认配置见 [dashboard.config.json](./dashboard.config.json) 和 [core/config.py](./core/config.py)。
+
+### 第一次使用
+
+1. 点击“新建议题”，填写 ID 和标题，可附正文。ID 为 1–128 位英文字母、数字、下划线或连字符；拒绝 Windows 设备名及仅大小写不同的重复 ID。
+2. 点击“展开详情”查看正文与历史，再点击“记录决策”追加原话和答复。页面要求填写变更说明，即使关闭 Git 自动提交也如此。
+3. 分别选择工作流、决策结论和实现状态。例如只同意方案的一部分时，选择“部分同意”，并在用户意见中写清范围。
+4. 最近一轮需要更正时点击“修改本轮”。检查预填内容后保存，旧文本保留在版本历史；更早的意见用新一轮追加更正。
+5. 核对保存反馈。Git 关闭或提交失败不等于台账未保存；不要因此重复追加同一段讨论。
+
+页面编辑器不提供已有议题标题、正文与分类的修改入口；这些字段可通过保存 API 修改，也可在备份后编辑权威 Markdown 并核对、重建索引。
+
+## 工作流、决策结论与实现状态
+
+这三组字段独立保存。选择“已决策”不自动表示“全部同意”，选择“已采纳”也不表示代码已经实现。`decision_status` 是补充展示文本，不是第四套状态机。
+
+| 字段 | 支持的值 |
+|---|---|
+| `workflow_state` | `pending` 待决策、`discussing` 待讨论、`decided` 已决策 |
+| `implementation_state` | `not_started` 未开始、`in_progress` 进行中、`implemented` 已实现、`verified` 已核验 |
+
+`decision_outcome` 的完整取值如下：
+
+| 值 | 含义与填写要求 |
+|---|---|
+| `""` | 尚无结论；新议题应明确保留此值 |
+| `accepted` | 采纳接受 |
+| **`partially_accepted`** | **部分同意**；从其他结论切换过来时，必须同时提交非空用户意见，说明哪些同意、哪些保留 |
+| `rejected` | 明确否决；必须有非空 `rejection_reason` |
+| `deferred` | 推迟再议／暂缓 |
+| `superseded` | 已被替代；可用 `superseded_by` 记录替代议题 |
+
+部分同意示例：“同意先保留本地文件；云端同步暂不接受，待隐私方案明确后再讨论。”服务检查用户意见是否非空，不自动理解或校验这段话的范围。否决原因中也可写重新讨论的前提，但没有单独的前提字段或语义校验。
+
+页面与 Agent 导出的分类用途不同：
+
+| 入口 | 当前纳入规则 |
+|---|---|
+| 页面“已定结论” | 工作流为 `decided`，结论为空、`accepted`、`partially_accepted` 或 `rejected`；部分同意与否决单独标注 |
+| 页面“待决策” | 工作流为 `pending`；不等于“所有尚未实现的议题” |
+| Agent `active_decisions` | 工作流为 `decided`，结论为 `accepted` 或兼容旧数据的空结论 |
+| Agent `rejected_proposals` | 明确否决的议题，包括兼容的旧否决文字 |
+| Agent `pending_requirements` | 未定议题、部分同意，以及已采纳但尚未核验的议题；部分同意不会整项进入 `active_decisions` |
+
+`deferred`、`superseded` 不列入 Agent 的当前要求清单。部分同意的导出保留完整正文与讨论，并提示按原话区分同意范围；不会自动把一个议题拆成多个要求。旧数据的空结论兼容规则不应代替新记录明确填写结论。
+
+“已核验”是调用者登记的状态。核验接口接收提交引用、核验人及测试说明，但不检查提交是否存在，也不运行测试；页面直接选择该状态同样不产生实际测试证据。
+
+## Markdown、链接与流程图
+
+- 保留文本中的单次换行和空段落；解析保存时会将 CRLF 归一化为 LF、裁剪字段两端空白，不保证字节级原样保存。
+- 支持表格及列对齐、标题、简单有序／无序列表、引用、行内代码、粗体、代码围栏与链接。不是完整 CommonMark/GFM 实现，不承诺嵌套列表、任务复选框、图片或任意 Markdown 插件。
+- 原始 HTML 作为文本显示。外部链接仅接受 HTTP(S)，不执行 `javascript:` 等链接。
+- 议题链接可写 `[存储选择](#adr-storage)`、`[存储选择](decisions/adr-storage.md)` 或 `../decisions/adr-storage.md` 形式的 Markdown 链接；点击后定位并展开目标，必要时清除筛选。文件链接中的片段不会定位正文小标题，仍跳到议题本身。
+
+流程图使用 `mermaid` 代码围栏，例如：
+
+````markdown
+```mermaid
+flowchart LR
+  A[读取议题] --> B{决策结论}
+  B -->|部分同意| C[核对同意与保留的范围]
+  B -->|已采纳| D[执行已确认的要求]
+```
+````
+
+Mermaid 12.1.0 的本地资源只在图表进入可视区域后加载，使用严格模式并随明暗／主题色变化重新绘制。不执行图表配置指令，不加载图表中的外部图片、图标或 CSS URL；语法错误时显示原因和源码。当前限制为 50,000 字符、500 条边，不保证所有 Mermaid 扩展都可用。版本、来源、校验值与 MIT 许可见 [web/vendor/](./web/vendor/)。
+
+## 刷新、草稿与离线行为
+
+- “刷新”按钮重新读取列表并检查文件与索引是否一致；窗口重新获得焦点也会刷新列表。没有后台文件监听或定时自动导入。
+- 从页面提交成功后，会刷新状态、使旧详情缓存失效，并展开定位刚保存的议题。与原筛选仍匹配时保留筛选；不匹配时提示并清除筛选。其他脚本通过 API 写入后，点击“刷新”或重新切回窗口查看。
+- 直接改 Markdown 不会自动覆盖 SQLite 索引。“刷新”遇到不同步会提示，需先核对改动，再按维护流程重建。
+- 编辑草稿、未确认请求与冲突信息只保存在当前标签页内存。关闭编辑弹窗可继续编辑草稿；**重载或关闭网页会丢失未提交草稿**。主题偏好保存在浏览器本地存储，与草稿不同。
+- 初次加载连不上服务时显示标明“离线示例”的演示数据，禁止提交；它不是已保存数据的离线副本。已加载项目后刷新失败，会保留当前列表而不替换成示例。
+
+## 数据、历史与维护
+
+### 各文件的职责
 
 ```mermaid
 flowchart TD
-    subgraph UI["现代化前端看板 (Web SPA / app.js)"]
-        CARD["卡片流 &amp; 正交三态筛选<br/>(工作流 / 决策结论 / 实现状态)"]
-        MODAL["决策录入 &amp; 冲突保护弹窗<br/>(保留草稿 / 乐观并发锁)"]
-        DRAWER["时间机器面板<br/>(单议题精准回溯 / 全库重置)"]
-        PROMPT["Agent Context 导出弹窗<br/>(一键复制治理约束 Prompt)"]
-    end
-
-    subgraph Service["业务协调层 (core/decision_service.py)"]
-        SVC["DecisionService<br/>- 幂等校验 (request_id)<br/>- 乐观锁核验 (expected_version)<br/>- 路径穿越防御<br/>- 多阶段保存状态机"]
-    end
-
-    subgraph CoreModules["核心引擎模块"]
-        SERVER["HTTP 服务层 (core/server.py)<br/>标准库 http.server / 10MB 请求体上限 / 本机回环"]
-        PARSER["Markdown 解析器 (core/markdown_parser.py)<br/>Frontmatter 2.0 / 代码围栏隔离 / 原话保留"]
-        DB["数据库引擎 (core/db.py)<br/>SQLite 结构化存储 / 快照链 / Backup API"]
-        GIT["Git 提交引擎 (core/git_engine.py)<br/>暂存区保护 / 隔离提交 / Co-Author 附加"]
-        RECOVERY["一致性恢复引擎 (core/recovery.py)<br/>Markdown-as-Source 索引重建 / 一致性检测"]
-        AGENT_CTX["Agent 上下文引擎 (core/agent_context.py)<br/>有效决策 / 否决红线分离 / 实现证据绑定"]
-    end
-
-    subgraph Storage["持久化与权威事实源"]
-        MD_FILES["decisions/&lt;id&gt;.md (权威事实源)"]
-        SQLITE_DB["decisions.db (高性能派生索引与快照链)"]
-        META_JSON["decisions/metadata.json (派生导出物)"]
-        GIT_REPO[".git 版本库历史"]
-    end
-
-    UI <-->|REST API| SERVER
-    SERVER --> SVC
-    SVC --> PARSER
-    SVC --> DB
-    SVC --> GIT
-    SVC --> RECOVERY
-    SERVER --> AGENT_CTX
-    AGENT_CTX --> DB
-
-    PARSER <--> MD_FILES
-    DB <--> SQLITE_DB
-    RECOVERY --> META_JSON
-    GIT --> GIT_REPO
+  UI[静态界面与 Markdown 渲染] --> HTTP[本机 HTTP API]
+  Agent[Agent 或脚本] --> HTTP
+  HTTP --> Service[DecisionService]
+  Service --> MD[decisions 下的权威 Markdown]
+  Service --> DB[SQLite 索引 历史和回执]
+  Service --> Export[metadata.json 摘要]
+  Service --> Git[可选 Git 提交]
+  DB --> Context[Agent 上下文]
 ```
 
----
+每个 `decisions/<id>.md` 保存元数据、正文与当前历史轮次；SQLite 另存修改前的快照、变更日志和请求回执。最近一轮被更正后的旧文本保存在数据库历史中，不能仅靠当前 Markdown 还原。`metadata.json` 只有摘要，不能单独恢复项目。
 
-## 🛡️ 核心治理机制与安全契约
+数据库没有议题时，启动会尝试导入已有 Markdown；新项目默认空白，不会自动复制 [examples/decisions/](./examples/decisions/)。导入警告或部分成功需要进一步核对，不能只凭“服务已启动”认定一致。
 
-### 1. 权威文档、索引与历史
-- **以 Markdown 文件为权威事实源**：每个 `decisions/<id>.md` 记录完整的机器元数据、论述正文与全部历史讨论轮次。
-- **SQLite 保存当前索引与历史快照**：当前议题可由 Markdown 重建；历史快照、变更日志和请求回执不能仅靠 Markdown 还原。页面列表从索引统计轮次，不扫描所有 Markdown；历史列表使用轻量议题 ID 缓存，旧快照首次读取时补齐缓存，完整快照内容不变。导出、一致性检查和重建仍会读取文件，未承诺固定耗时。
-- **派生导出物**：`metadata.json` 是摘要列表，不含完整正文与讨论，不能单独用于恢复项目。不要直接编辑它。
-- 数据库为空时自动导入已有 Markdown；新项目默认空白，`examples/decisions/` 不会自动复制。也可显式运行 `python -m core.server --rebuild-index`。
-- 损坏的 SQLite 文件可能使程序在初始化阶段中止，不能直接靠上述命令修复。先停止服务，备份整个数据目录，保留并移出损坏数据库及其附属文件，再用完好的 `decisions/*.md` 重建新索引；若要保留旧快照和请求回执，需要有效数据库备份。
+单议题恢复会恢复该议题在指定快照中的状态，并生成新版本，其他议题保持不变。恢复到创建前可撤销创建；恢复已删除议题也受版本和重试契约保护。全库恢复影响全部议题，快照外的 Markdown 会归档，应明确区分这两种操作。
 
-### 2. Git 暂存区隔离保护 (P1-B)
-- **严禁意外夹带用户代码**：自动提交前自动执行 `git diff --cached --name-only` 扫描暂存区。
-- **受控隔离提交**：若发现暂存区包含非本次操作的文件，跳过 Git 提交并保留已保存的数据。提交使用字面路径限定台账文件，不运行 `reset` 或 `stash`；提交失败时本次台账文件可能仍在暂存区。
-- `git_commit.enabled` 可关闭自动提交；未配置 Git 身份、仓库不可用或提交失败不等于决策保存失败，检查响应中的 `save_status`、`export_status`、`git_status`。协作署名 `co_author` 默认留空，按实际参与者填写。不会自动 push。
+快照是可写 SQLite 中的记录，不具备防篡改签名保证。SQLite 在线备份只备份数据库，不含 Markdown、配置或浏览器草稿，也没有对应的 HTTP 备份导入接口。完整备份应在停止写入后一起保存配置、Markdown 与有效数据库备份。
 
-### 3. 清晰的回滚边界与单议题精准回溯 (P1-C)
-- **单议题历史精准回退**：默认支持 `/api/topic/:id/restore`，从历史快照中仅提取指定议题的状态并恢复，完全不波及其他议题的正常演进，并以 `action_type="TOPIC_RESTORE"` 生成新的审计版本，原历史完整保留。
-- **全库快照恢复**：`/api/rollback` 恢复全部议题并写回 Markdown；快照外的 Markdown 会归档，历史保留。它影响其他议题，优先使用单议题恢复。
-- 快照是可写 SQLite 中的版本记录，不具备防篡改签名或不可变审计保证。恢复快照也不等于导入数据库备份文件。
+### 检查与重建
 
-### 4. 并发乐观锁与幂等性防重放 (P1-D)
-- **版本乐观锁**：HTTP 保存或恢复已有议题，以及核验接口，必须携带读取时的 `expected_version`（或 `X-Expected-Version` 请求头）；缺失返回 `428 Precondition Required`，过期返回 `409 Conflict`。版本号必须为正整数，不能使用布尔值或小数。创建新议题使用 `/api/topic/create`；恢复已删除的议题时可省略版本号，一旦议题已被重新创建则要求提供版本。
-- **全库恢复前提**：从 `/api/git/log` 读取 `current_revision`，在 `/api/rollback` 中将其作为 `expected_revision` 传回；自读取以来存在新快照则拒绝恢复。前端历史面板已自动携带该字段。
-- **页内草稿保护**：冲突时保留草稿并要求核对合并；请求结果不确定时保留原请求以供重试。草稿仅存在当前标签页内存中，刷新或关闭页面会丢失，浏览器离开提示不能替代备份。
-- **幂等性保障**：创建、保存、单议题恢复和核验支持 `X-Request-ID`。相同请求数据重试时重放原结果或续做未完成阶段；相同 ID 携带不同内容时明确报错。全库恢复、索引重建和备份没有相同的重试契约。
-- 恢复请求绑定原版本、快照、作者和原因；恢复已删除议题时，重试仍保留最初省略的版本参数。升级前旧格式的恢复回执会报冲突，先核对当前状态与历史，不要换 ID 盲目重做。延迟的保存/恢复重试遇到后续台账版本时会跳过旧 Git 补偿（`skipped_superseded`），避免把后续内容提交在旧说明下。
-- **核验入口统一**：HTTP 与 Agent 调用均经过 `DecisionService`。核验的数据库更新、审计快照和幂等回执使用同一事务；Markdown 缺失或与索引不一致时拒绝核验。文件/导出写入失败时补偿还原，元数据导出使用临时文件原子替换。
-
-### 本机访问边界
-
-- 服务只接受 `localhost` 或回环 IP 监听，配置文件、环境变量和 `--host` 均不能开启局域网/公网监听；IPv6 可用 `--host ::1`。
-- 校验请求 Host、端口和浏览器 Origin；POST 仅接受 `application/json`，拒绝跨站请求、重复 Content-Length 与 Transfer-Encoding，连接读取超时为 10 秒。静态资源禁止目录列表与越出网页目录的符号链接。
-- 旧脚本更新已有议题前先读取 `/api/topic/:id` 的 `version`，原样作为 `expected_version` 发送。重试时保留原版本号、请求 ID 和请求内容；遇到 `409` 应重新读取并人工核对，不能自动改用最新版本覆盖。
-- 这些限制不提供本机用户之间的身份认证。仅运行一个服务实例访问同一数据目录；维护 CLI 不应与服务同时写入。SQLite 与 Markdown 仍非单一存储事务，进程强制退出或断电后的跨文件恢复需检查 `--check-consistency`，核对权威 Markdown 后使用 `--rebuild-index`。
-- HTTP 连接可并发接收，浏览器预连接不会阻塞其他请求；同一数据库的业务读写仍用进程内共享锁串行处理，版本检查与写入位于同一锁内。重建、备份或 Git 操作期间页面请求可能等待。连接读取超时为 10 秒，每条 Git 命令超时为 30 秒；超时须核对实际提交记录。这些限制不是完整的流量控制机制。
-
-### 5. 正交状态模型与否决红线约束 (P2-E)
-将复杂的业务生命周期拆解为正交三维空间：
-- **工作流状态 (`workflow_state`)**：`pending`（待决策）| `discussing`（待讨论）| `decided`（已决策）
-- **决策结论 (`decision_outcome`)**：空字符串（尚无结论）| `accepted`（已采纳）| `rejected`（明确否决）| `deferred`（推迟）| `superseded`（已被替代）
-- **实现状态 (`implementation_state`)**：`not_started`（未开始）| `in_progress`（进行中）| `implemented`（已实现）| `verified`（已核验）
-- **❌ 明确否决方案红线**：被否决方案同样是重要资产。系统强制保存否决原因与重新讨论前提，并在卡片与 Agent Prompt 中重点标红，防止 Agent 反复重提被否决的设计。
-- **实现证据登记**：通过 `/api/topic/:id/verify` 记录提交引用、核验人及测试说明；服务不会验证提交是否存在，也不会执行测试。`verified` 是调用者声明的状态。一个提交引用本身不代表已实现。
-
-### 6. 面向 Agent 的治理上下文导出 (P2-F)
-- 提供 `/api/agent/context?module=...&format=markdown` 接口。
-- 按 `module` 匹配 section/object/function，按 `path` 匹配正文或 section 子串，也可按 `topic_id` 查询；不自动分析代码依赖。
-- 导出保留匹配议题的完整正文和讨论记录，并区分**有效决策**、**明确否决**与**待落实/核验**；暂缓和被替代议题不列为有效要求。较大的台账建议按议题或模块查询，网页默认导出全部。
-
-### 7. Frontmatter 2.0 规范与代码围栏容错 (P2-G)
-- 采用 `schema_version: "2.0"` Frontmatter，支持本项目字段、JSON 转义字符串和有限块标量，不是通用 YAML 解析器。
-- 正文标题和闭合代码围栏内的模板示例会保留。若正文/原话在围栏外使用本项目的历史标题、轮次标题、用户/团队字段标头，或留下未闭合围栏，保存前的往返检查可能拒绝写入；按提示闭合围栏或把模板示例放进闭合围栏，防止静默丢内容。
-- CRLF 在解析时归一化为 LF，字段两端空白会裁剪；保留语义内容，不保证字节级无损。
-
----
-
-## 🚀 快速上手 (Quick Start)
-
-### 1. 运行环境要求
-- Python 3.9 及以上
-- Git（仅自动提交功能需要；使用前配置仓库与提交身份）
-- **Python 服务仅使用标准库**；浏览器图表库已随项目打包，无需 npm 安装或运行时访问 CDN。Mermaid 的版本、完整性与 MIT 许可见 [`web/vendor/`](./web/vendor/)。
-
-### 2. 启动服务
-- **Windows 用户**：双击运行 [`start_dashboard.bat`](./start_dashboard.bat)
-- **Linux / macOS 用户**：
-  ```bash
-  chmod +x start_dashboard.sh
-  ./start_dashboard.sh
-  ```
-- **命令行启动**：
-  ```bash
-  python -m core.server --port 8765
-  ```
-
-访问看板：**`http://127.0.0.1:8765`**。
-
-以上命令在仓库根目录运行。首次启动点击“新建议题”，填写 ID 和标题后创建，展开卡片查看正文，再点击“确定决策”追加原话和团队答复。ID 只允许 1–128 位英文字母、数字、下划线和连字符；不能使用 Windows 设备名，也不能与已有 ID 仅大小写不同。
-
-### 配置与数据位置
-
-默认读取当前工作目录的 [`dashboard.config.json`](./dashboard.config.json)，缺省文件不存在时使用内置默认值。显式传入 `--config /path/to/dashboard.config.json` 时，相对数据路径与 Git 仓库根目录以该配置所在目录为准；配置缺失或格式错误会停止运行，防止误用另一项目的默认目录。
-
-| 设置 | 缺省值 / 说明 |
-|---|---|
-| `decisions_dir` | `decisions`，权威议题文件 |
-| `database_path` | `decisions.db`，索引、历史与请求回执 |
-| `metadata_json_path` | `decisions/metadata.json`，摘要导出 |
-| `git_commit.enabled` | `true`；设为 `false` 可只保存本地台账 |
-| `host` / `port` | `127.0.0.1` / `8765`；可用 `AGENT_DASHBOARD_HOST`、`AGENT_DASHBOARD_PORT` 覆盖，命令行优先 |
-| `categories` | 页面业务对象与功能分类配置 |
-
-示例：`python -m core.server --config "D:/MyProject/dashboard.config.json" --no-browser`。无需复制服务源码到数据项目。`doc_data_json_path` 是保留的旧配置项，当前服务不使用它作为保存或导入入口。
-
-### 3. CLI 维护工具命令
-```bash
-# 检查 Markdown 文件、SQLite 索引与 metadata.json 的一致性
-python -m core.server --check-consistency
-
-# 以 decisions/*.md 为权威事实源全量重建数据库索引
-python -m core.server --rebuild-index
-
-# 按模块导出供 Agent 注入的 Prompt Markdown 治理约束
-python -m core.server --export-agent-context "核心架构"
-```
-
-一致性检查不通过、重建失败或只成功导入部分文件时退出码为非零；查看输出中的错误文件清单。重建会更新成功解析的议题并移除缺失文件的索引，运行前先核对文件与备份。部分成功不代表所有数据均已恢复。
-
-### 4. Agent 入口与可选钩子
-
-从 [AGENTS.md](./AGENTS.md) 开始，完整操作与宿主接入见 [Agent 操作指南](./docs/agent-workflow.md)。服务启动后，从仓库根目录执行：
+从源码目录执行时，为已有项目带上相同的 `--config`。CLI 维护前停止该数据目录的服务，避免多进程操作同一台账；在线检查优先使用 HTTP 或 Agent 钩子。
 
 ```sh
-python -m core.agent_hooks --config /path/to/dashboard.config.json before-task --topic adr-storage
-python -m core.agent_hooks --config /path/to/dashboard.config.json after-write --topic adr-storage --receipt /path/to/receipt.json
+python -m core.server --config "D:/MyProject/dashboard.config.json" --check-consistency
+python -m core.server --config "D:/MyProject/dashboard.config.json" --rebuild-index
+python -m core.server --config "D:/MyProject/dashboard.config.json" --export-agent-context "存储层"
 ```
 
-任务前核对目标项目与一致性，再读取结论；写入后核对原始成功回执和当前版本。失败退出码为 2，不会把离线、错项目或过期回执当成空看板。钩子只读、可手动执行，不自动安装宿主钩子、不修改全局配置，也不证明实现或测试通过。
+先检查和备份，再决定是否重建。重建按权威 Markdown 更新索引，并移除缺失文件的索引；失败或部分成功时退出码非零，需查看失败文件清单。损坏的 SQLite 可能在初始化时就失败：保留原数据库及附属文件，使用有效备份恢复，或在隔离目录用完好 Markdown 重建；重建不能找回只存于旧数据库的历史与回执。
 
----
+### Git 与访问边界
 
-## 🔌 RESTful API 规范
+保存台账与自动提交 Git 是独立阶段。自动提交默认启用，范围限定为本次台账文件；发现其他已暂存文件时跳过提交，不执行 `reset` 或 `stash`。提交失败后本次文件可能留在暂存区。没有配置身份、仓库不可用或 Git 出错时，查看回执中的实际状态。看板不会自动 push；核验接口也不自动提交 Git。
 
-| 接口路径 | 方法 | 说明 |
+`git_commit.co_author` 只给看板自动生成的提交添加协作署名；维护工程时执行的 `git commit` 仍须按实际参与者填写 `Co-authored-by`，不会从此配置自动继承。
+
+服务只接受 `localhost` 或回环 IP 监听，包括 `--host ::1`；不提供本机用户间认证。校验 Host、端口与 Origin；POST 要求 JSON、唯一 Content-Length，不接受 Transfer-Encoding；请求体上限 10 MB、读取超时 10 秒，Git 命令超时 30 秒。静态资源不开放目录列表或越出网页目录的符号链接。
+
+HTTP 连接可并发接收，同一台账的业务读写仍由进程内锁串行处理。只支持一个进程管理一个数据目录；SQLite 和 Markdown 不构成单一事务，强制结束进程或断电后须核对一致性。文件检查、重建、备份或 Git 操作期间其他业务请求可能等待。
+
+## HTTP API
+
+接口由 [core/server.py](./core/server.py) 提供。`:id` 使用实际议题 ID；所有 POST 都发送 `Content-Type: application/json`，无业务参数的维护操作也发送 `{}`。
+
+| 方法 | 路径 | 用途与关键参数 |
 |---|---|---|
-| `/api/config` | `GET` | 获取当前看板项目配置 |
-| `/api/status` | `GET` | 获取服务运行状态、HEAD Hash 与存储一致性报告 |
-| `/api/topics` | `GET` | 元数据、当前已定/待决策概览与变更记录 |
-| `/api/topic/:id` | `GET` | **核心第二阶段**：按需异步读取解析单个议题 Markdown 正文与历史轮次 |
-| `/api/topic/:id/save` | `POST` | 版本核验 -> 写 Markdown -> 更新索引与快照 -> 导出 JSON -> 尝试 Git 提交；这些阶段不是跨文件原子事务 |
-| `/api/topic/create` | `POST` | 安全创建全新议题（校验 ID 防路径穿越） |
-| `/api/topic/:id/restore` | `POST` | **单议题针对性回溯**：从指定快照恢复该议题，不影响其他议题 |
-| `/api/topic/:id/verify` | `POST` | **实现证据核验绑定**：关联代码实现 Commit Hash、核验人与测试说明 |
-| `/api/agent/context` | `GET` | 面向 Agent 导出只读决策与否决红线约束 (`?format=markdown|json`) |
-| `/api/recovery/check` | `GET` | 检查三态存储一致性报告 |
-| `/api/recovery/rebuild` | `POST` | 从 Markdown 文件全量重建 SQLite 索引 |
-| `/api/backup` | `POST` | SQLite 一致性在线备份至 `backups/`，响应返回路径；不包含 Markdown，也没有备份文件导入接口 |
-| `/api/rollback` | `POST` | 全库快照重置（同步写回 Markdown 与数据库） |
-| `/api/git/log` | `GET` | 查询 Git 提交记录与 Revision 快照链 |
+| GET | `/api/config` | 当前项目配置 |
+| GET | `/api/status` | 项目路径、Git HEAD、存储一致性；HEAD 属于数据项目，不一定是看板程序版本 |
+| GET | `/api/topics` | 索引元数据、概览、变更记录、配置及 `capabilities` |
+| GET | `/api/topic/:id` | 按需读取 Markdown 正文 `core_content` 和讨论 `rounds`；文件缺失时可能返回有限的索引回退数据 |
+| POST | `/api/topic/create` | 必填 `id`，建议提供 `title`（省略时用 ID 作标题）；可选 `content_override` 与状态；API 未指定工作流时默认 `discussing`，页面显式提交 `pending` |
+| POST | `/api/topic/:id/save` | 更新字段或追加讨论；用 `edit_latest_round: true` 更正最近一轮 |
+| GET | `/api/git/log` | `topic_id`、`limit`、`offset` 筛选／分页快照；返回 `current_revision`；Git 提交列表不按议题筛选 |
+| POST | `/api/topic/:id/restore` | `rev_id`，可选 `author`、`reason`；恢复已有议题须带 `expected_version` |
+| POST | `/api/topic/:id/verify` | `impl_commit`、`expected_version`；可选 `verifier`、`test_summary`、布尔 `mark_verified`（默认 `true`；`false` 记录为已实现） |
+| GET | `/api/agent/context` | `module`、`path`、`topic_id`；`format=markdown` 或默认 JSON |
+| GET | `/api/recovery/check` | 文件、索引与摘要一致性报告 |
+| POST | `/api/recovery/rebuild` | 以 Markdown 重建索引；先确认权威文件和备份 |
+| POST | `/api/backup` | SQLite 在线备份至数据项目的 `backups/`，回执返回路径 |
+| POST | `/api/rollback` | `rev_id` 与 `expected_revision`；从历史接口读取 `current_revision` 作为恢复前提 |
 
-所有 POST 使用 `Content-Type: application/json`。以下示例使用标准库创建议题，再读取版本追加意见（服务须已启动，示例 ID 必须尚未存在）：
+通用项目不提供 `/api/data`、`/archive.html` 或旧看板迁移入口；工作区包装服务可以额外提供这些路由，不应据此编写通用客户端。
+
+### 字段、版本与重试
+
+已有议题省略的元数据字段保留原值；`content_override` 修改正文，`new_user_opinion` / `new_agent_reply` 追加原话与答复，`commit_message` 记录变更说明。普通保存携带非空意见、答复或变更说明时会追加一轮；只有状态字段的保存不会增加轮数。
+
+修改最近一轮必须传 `edit_latest_round: true`、读取时的 `expected_version`，以及至少一个要改的回复字段。省略的另一方回复保持原文，空字符串表示清空。操作生成新版本和快照，不增加轮数；`commit_message` 用于本次修改说明，不替换该轮原有的变更说明。发生并发新轮次时，页面允许保留草稿后改为追加更正，不会把旧修改直接套到新轮次。
+
+列表的 `latest_round_user_opinion` / `latest_round_agent_reply` 对应实际最近一轮，允许为空；旧字段 `last_user_opinion` / `last_agent_reply` 保留各自最近有内容的历史答复语义，不能用来填充“修改本轮”。完整原文以详情的 `rounds` 为准。
+
+更新或恢复已有议题、登记核验时必须携带正整数 `expected_version`，也可通过 `X-Expected-Version` 请求头传递。缺失返回 `428`，版本过期返回 `409`；文件与索引不同步也可能阻止写入，应按错误信息核对，不能只替换版本号后覆盖。恢复已删除议题允许省略版本，若已重新创建则重新要求版本。直接使用 Python 服务类时部分版本参数仍可选，集成应使用带版本前提的 HTTP 路径。
+
+创建、保存、单议题恢复和核验支持 `request_id` 或 `X-Request-ID`。每次独立操作使用新 ID；重试使用原 ID、原版本、原参数。相同 ID 换内容会冲突；网络异常或 `500` 不一定意味着没有写入。完整请求与成功回执都应保存，先核对再继续。全库恢复、索引重建与备份没有同样的幂等重试契约。
+
+保存回执的 `new_version`、`round`、`save_status`、`export_status`、`git_status` 分别描述台账结果；核验回执使用 `version`，没有 Git 提交结果。只有 `git_status: "committed"` 表示本次提交成功，存在 `commit_hash` 本身不能证明提交或推送发生。延迟重试可能返回 `skipped_superseded`，表示不再替较旧操作补交后续内容。
+
+### 示例：部分同意并更正最近一轮
+
+以下为演示数据，应在独立测试台账运行。每次请求先写入临时目录，方便原样重试；真实使用时改成实际用户原话。
 
 ```python
 import json
+import tempfile
 import uuid
-from urllib.request import Request, urlopen
+from pathlib import Path
+from urllib.request import Request, build_opener, ProxyHandler
 
 base = "http://127.0.0.1:8765"
+opener = build_opener(ProxyHandler({}))
+log_dir = Path(tempfile.mkdtemp(prefix="dashboard-requests-"))
+print("请求和回执目录：", log_dir)
+topic_id = "demo-" + uuid.uuid4().hex[:12]
 
-def post(path, payload, request_id):
-    req = Request(base + path, json.dumps(payload).encode("utf-8"),
-                  {"Content-Type": "application/json", "X-Request-ID": request_id})
-    with urlopen(req) as response:
+def get_topic():
+    with opener.open(base + "/api/topic/" + topic_id, timeout=30) as response:
         return json.load(response)
 
-created = post("/api/topic/create", {
-    "id": "adr-storage", "title": "存储选择", "workflow_state": "pending",
-    "content_override": "记录待讨论的问题与依据。"
-}, str(uuid.uuid4()))
-with urlopen(base + "/api/topic/adr-storage") as response:
-    topic = json.load(response)
-request_id = str(uuid.uuid4())
-payload = {"expected_version": topic["version"], "new_user_opinion": "先保留本地文件。"}
-saved = post("/api/topic/adr-storage/save", payload, request_id)
+def send_saved(request_file):
+    operation = json.loads(request_file.read_text(encoding="utf-8"))
+    req = Request(base + operation["path"],
+                  json.dumps(operation["payload"]).encode("utf-8"),
+                  {"Content-Type": "application/json"})
+    with opener.open(req, timeout=30) as response:
+        receipt = json.load(response)
+    request_file.with_suffix(".receipt.json").write_text(
+        json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8")
+    return receipt
+
+def post(name, path, payload):
+    operation = {"path": path, "payload": dict(payload, request_id=str(uuid.uuid4()))}
+    request_file = log_dir / (name + ".json")
+    request_file.write_text(json.dumps(operation, ensure_ascii=False, indent=2), encoding="utf-8")
+    return send_saved(request_file)
+
+created = post("create", "/api/topic/create", {
+    "id": topic_id, "title": "存储选择", "workflow_state": "pending",
+    "decision_outcome": "", "implementation_state": "not_started",
+    "content_override": "讨论本地文件与云端同步的范围。",
+})
+topic = get_topic()
+saved = post("partial", "/api/topic/" + topic_id + "/save", {
+    "expected_version": topic["version"], "workflow_state": "decided",
+    "decision_outcome": "partially_accepted",
+    "new_user_opinion": "同意保留本地文件。\n云端同步待隐私方案明确后再讨论。",
+    "new_agent_reply": "按同意范围实施，保留其余问题。",
+})
+topic = get_topic()
+if topic["version"] != saved["new_version"]:
+    raise RuntimeError("议题已变更，请先核对最新轮次和内容")
+amended = post("amend", "/api/topic/" + topic_id + "/save", {
+    "expected_version": topic["version"], "edit_latest_round": True,
+    "new_agent_reply": "先落实本地文件；云端同步继续待定，不计入已同意范围。",
+})
 ```
 
-省略已有议题的字段会保留原值；`content_override` 修改正文。网络异常时用相同 `payload` 和 `request_id` 重试；不要重新生成 ID 或盲目替换版本号。`409` 后读取最新内容并核对，`428` 表示缺少版本前提。直接调用 Python `DecisionService` 的版本参数仍可选，脚本应主动携带读取版本。
+请求结果不确定时，读取已经保存的请求，例如 `send_saved(log_dir / "amend.json")`；不要重新调用 `post()` 生成新 ID。遇到 `409` 时先核对最新轮次与字段，再决定独立的新操作。
 
-修改最近一轮时向同一保存接口传 `edit_latest_round: true`，必须带 `expected_version`，并用 `new_user_opinion` / `new_agent_reply` 指定要改的字段；省略的另一方回复保留，空字符串表示清空。修改生成新版本和快照，不增加讨论轮数，旧回复可在历史中恢复。并发新增轮次或同版本文件漂移会阻止覆盖；页面对新轮次冲突仅允许保留草稿后改为追加更正。
+## Agent 使用入口
 
-`decision_outcome: "partially_accepted"` 表示部分同意；首次切换时须在 `new_user_opinion` 说明范围。概览和筛选单独标示，Agent 上下文保留全部原话并明确其余内容尚未获同意，不把整项提案列为已完全采纳。
+从 [AGENTS.md](./AGENTS.md) 开始，完整流程见 [Agent 操作指南](./docs/agent-workflow.md)。服务启动后，从本仓库目录执行：
 
----
+```sh
+python -m core.agent_hooks --config "D:/MyProject/dashboard.config.json" before-task --topic adr-storage
+python -m core.agent_hooks --config "D:/MyProject/dashboard.config.json" after-write --topic adr-storage --receipt "D:/MyProject/receipt.json"
+```
 
-## 📄 单议题 Markdown 格式标准 (`schema_version: "2.0"`)
+将 `adr-storage` 换成已有议题 ID。`before-task` 核对目标路径、一致性并读取当前结论；`after-write` 核对原始成功回执、当前版本与一致性，失败退出码为 2。指定暂缓／已替代议题时，钩子另附 `requested_topic` 供追溯；普通上下文清单仍按前述分类规则生成。
 
-位于 `decisions/<id>.md` 的议题文件结构：
+上下文按 `module` 匹配 section/object/function 子串，按 `path` 匹配正文或 section 子串；不分析代码依赖。导出保留匹配议题的完整正文和讨论，大台账宜按议题或模块查询。钩子只读，不会安装宿主钩子、修改全局配置、启动服务或证明代码已通过测试；需由宿主或操作者主动接入。
+
+## 单议题 Markdown 格式
+
+采用本项目的 `schema_version: "2.0"` Frontmatter，支持 JSON 转义字符串和有限块标量，不是通用 YAML 解析器。以下是“部分同意、尚未实现”的示例，与产品自身的架构决定无关：
 
 ````markdown
 ---
 schema_version: "2.0"
-id: "adr-001-architecture-style"
-title: "轻量微内核与单一可执行文件架构"
+id: "adr-storage"
+title: "存储选择"
 version: 2
-section: "核心架构"
-object: "通用系统"
-function: "核心规范"
-priority: "高"
+section: "存储"
+object: "数据层"
+function: "持久化"
+priority: "普通"
 workflow_state: "decided"
-decision_status: "已定"
+decision_status: "部分同意"
 sources: ""
-decision_outcome: "accepted"
+decision_outcome: "partially_accepted"
 rejection_reason: ""
 superseded_by: ""
-implementation_state: "implemented"
-impl_commit: "de371b8"
-impl_verifier: "Antigravity-AI (单元测试 19/19 通过)"
+implementation_state: "not_started"
+impl_commit: ""
+impl_verifier: ""
 ---
+# 存储选择
 
-# 轻量微内核与单一可执行文件架构
-
-> **锚点 ID**：`adr-001-architecture-style` | **所属对象**：`通用系统` | **业务功能**：`核心规范`
-> **生命周期**：`🟢 已决策` | **决策状态**：`已定` | **实现现状**：`implemented` | **优先级**：`高`
+> **锚点 ID**：`adr-storage` | **所属对象**：`数据层` | **业务功能**：`持久化`
+> **生命周期**：`🟢 已决策` | **决策状态**：`部分同意` | **实现现状**：`not_started` | **优先级**：`普通`
 
 ## 核心论述与现实依据
 
-系统定位为人机协同决策治理台账，必须保证本地优先、极简启动与无外部依赖。
+讨论本地文件与云端同步的范围。
 
 ## 历史讨论与决策记录
 
-### 第 1 轮定案与要求 (2026-10-05 10:00)
-- **变更说明**：初始化架构决策
+### 第 1 轮定案与要求
+- **变更说明**：明确存储范围
 - **💡 用户意见（最新原话）**：
-采用标准库开发，不引入外部第三方框架，保证单执行脚本直接启动。
+
+同意保留本地文件。
+云端同步待隐私方案明确后再讨论。
+
 - **🤖 团队答复（落实说明）**：
-已基于 Python 标准库 http.server 与 sqlite3 构建核心微内核。
+
+先落实本地文件，其余继续待定。
 ````
 
----
+正文或原话在围栏外使用本项目的历史标题、轮次标题、用户／团队字段标头，可能与记录协议冲突；未闭合围栏也可能使保存前的往返检查失败。按提示闭合围栏或把模板示例放入闭合围栏，不要删除原话绕过检查。
 
-## 🧪 自动化测试验证
+## 验证与源码入口
 
-项目使用标准库单元与回归测试，覆盖保存、恢复、并发冲突与 HTTP 边界等场景。测试通过不代表所有平台、断电或恶意本机进程场景均已验证：
-
-```bash
+```sh
 python -m unittest discover tests
+node --test tests/markdown.test.js
+node --check web/app.js
+node --check web/markdown.js
+node --check web/diagrams.js
+git diff --check
 ```
 
-- `test_git_engine.py`：暂存区隔离保护、存在其他已暂存文件时拒绝误提交、锁定检测
-- `test_db_and_concurrency.py`：乐观并发版本锁（409 Conflict）、幂等键去重重放、单议题回退、SQLite 在线备份
-- `test_markdown_parser.py`：Frontmatter 2.0 往返序列化、代码围栏内假轮次隔离、多行原话保留、CRLF 归一化
-- `test_decision_service.py`：端到端状态机协调、非法 ID 与路径穿越强拦截、多阶段状态输出
-- `test_agent_and_recovery.py`：以 Markdown 为事实源重建索引、有效决策与否决红线分离、代码实现核验证据绑定
-- `test_security_boundaries.py`：真实 HTTP 入口的 Host/Origin、版本前提、核验失败补偿和幂等性、全库恢复冲突、慢请求、静态目录边界；符号链接用例在主机不允许创建链接时跳过
-- `test_product_contracts.py`：部分字段更新保留原值、正文与讨论往返校验、跨平台 ID 冲突、完整上下文、概览、配置目录和失败退出码
-- `test_final_audit.py`：旧记录兼容、快照恢复预检、失败重试、延迟 Git 补偿、历史缓存、空连接与真实 HTTP 并发写入
-- `test_agent_hooks.py`：钩子目标校验、完整上下文、写回执、离线/漂移/过期结果和 CLI 退出码
+Python 回归覆盖保存、恢复、幂等性、并发版本检查、索引一致性、Git 暂存区保护、HTTP 边界与 Agent 钩子。[test_usability_regressions.py](./tests/test_usability_regressions.py) 覆盖部分同意、多行回复、最近一轮更正、历史保留和回执轮次；[markdown.test.js](./tests/markdown.test.js) 检查换行、表格、链接和转义。符号链接测试在主机不允许创建链接时跳过。
 
-Git 提交使用字面路径匹配与 NUL 分隔的暂存区列表，避免特殊目录名/中文路径导致误暂存；空目标列表不执行提交。相关规则见 [Git pathspec 文档](https://git-scm.com/docs/gitglossary.html#def_pathspec)，静态链接边界见 [Python HTTP 服务安全说明](https://docs.python.org/3/library/http.server.html#security-considerations)。
+交互变更还需用独立台账进行浏览器检查：新建、部分同意、修改本轮及冲突、表格与 Mermaid、筛选、批量展开、保存后定位和主题切换。单元测试不代替这些检查，也不代表跨平台或断电恢复均已验证。
 
----
+主要实现：[HTTP 服务](./core/server.py)、[业务写入](./core/decision_service.py)、[Markdown 解析](./core/markdown_parser.py)、[存储与历史](./core/db.py)、[恢复与一致性](./core/recovery.py)、[Agent 上下文](./core/agent_context.py)、[前端](./web/)。
 
-## 📜 开源许可证
+## 许可证
 
-本项目采用 **[GNU General Public License v3.0 (GPLv3)](./LICENSE)** 许可证开源。  
-欢迎在各类人机协同、自主 Agent 治理与软件工程研发项目中引用与二次开发。
+本项目采用 [GNU GPLv3](./LICENSE)。随附的 Mermaid 资源保留其 [MIT 许可证](./web/vendor/mermaid-LICENSE) 和来源记录。
