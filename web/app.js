@@ -1319,6 +1319,9 @@
   const REVIEW_OUTCOME_OPTIONS = [
     ["", "尚无结论"], ["accepted", "🟢 已同意"], ["partially_accepted", "◐ 部分同意"], ["rejected", "❌ 已否决"],
   ];
+  const REVIEW_IMPLEMENTATION_OPTIONS = [
+    ["not_started", "未开始"], ["in_progress", "进行中"], ["implemented", "已实现"], ["verified", "已核验"],
+  ];
 
   function reviewTopics() {
     return state.topicsMeta;
@@ -1438,15 +1441,14 @@
     }
     renderReviewChoiceGroup("review-workflow-options", REVIEW_WORKFLOW_OPTIONS, draft.workflow_state);
     renderReviewChoiceGroup("review-outcome-options", REVIEW_OUTCOME_OPTIONS, draft.decision_outcome);
+    renderReviewChoiceGroup("review-implementation-options", REVIEW_IMPLEMENTATION_OPTIONS, draft.implementation_state || "not_started");
     renderReviewDetail(topic);
-    const implementation = document.getElementById("review-implementation-select");
-    if (implementation) implementation.value = draft.implementation_state || "not_started";
-    const userOpinion = document.getElementById("review-user-opinion");
-    if (userOpinion) userOpinion.textContent = draft.new_user_opinion || "暂无原话记录";
-    const opinion = document.getElementById("review-opinion-input");
-    if (opinion && document.activeElement !== opinion) opinion.value = draft.new_agent_reply || "";
+    const userOpinion = document.getElementById("review-user-opinion-input");
+    if (userOpinion && document.activeElement !== userOpinion) userOpinion.value = draft.new_user_opinion || "";
+    const agentReply = document.getElementById("review-agent-reply");
+    if (agentReply) agentReply.textContent = draft.new_agent_reply || "暂无 Agent 回复";
     const status = document.getElementById("review-save-status");
-    if (status) status.textContent = draft.mode === "amend" ? "提交将修改最近一轮，原文保留在版本历史中。" : "该议题尚无讨论轮次，提交将追加第一轮。";
+    if (status) status.textContent = draft.mode === "amend" ? "可修改本轮用户意见；上一轮 Agent 回复只读，原文保留在版本历史中。" : "该议题尚无讨论轮次，提交将记录本轮用户意见。";
     const overview = document.getElementById("review-overview");
     if (overview) {
       overview.innerHTML = topics.map((item, itemIndex) => `<button type="button" class="review-overview-card${itemIndex === state.review.index ? " selected" : ""}" data-review-index="${itemIndex}"><span class="review-overview-number">${String(itemIndex + 1).padStart(2, "0")} / ${String(topics.length).padStart(2, "0")}</span><span class="review-overview-title">${escapeHtml(item.title || item.id)}</span></button>`).join("");
@@ -1491,10 +1493,8 @@
     const topic = reviewTopics()[state.review.index];
     if (!topic) return;
     const draft = reviewDraftFor(topic);
-    const opinion = document.getElementById("review-opinion-input");
-    const implementation = document.getElementById("review-implementation-select");
-    if (opinion) draft.new_agent_reply = opinion.value;
-    if (implementation) draft.implementation_state = implementation.value;
+    const opinion = document.getElementById("review-user-opinion-input");
+    if (opinion) draft.new_user_opinion = opinion.value;
   }
 
   async function submitReview() {
@@ -1525,7 +1525,22 @@
       const requestId = createRequestId();
       const session = { base: { ...topic }, draft, mode: draft.mode, topicId: topic.id };
       const payload = decisionPayload(session, requestId);
-      if (draft.mode === "amend") payload.edit_latest_round = true;
+      const originalOpinion = String(valuesFromMeta(topic).new_user_opinion || "").trim();
+      const currentOpinion = String(draft.new_user_opinion || "").trim();
+      const opinionChanged = currentOpinion !== originalOpinion;
+      delete payload.new_agent_reply;
+      delete payload.edit_latest_round;
+      payload.commit_message = opinionChanged ? draft.commit_message.trim() : "";
+      if (draft.mode === "amend") {
+        if (opinionChanged) {
+          payload.edit_latest_round = true;
+          payload.new_user_opinion = currentOpinion;
+        } else {
+          delete payload.new_user_opinion;
+        }
+      } else {
+        payload.new_user_opinion = currentOpinion;
+      }
       const response = await fetch(`${topicPath(topic.id)}/save`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Request-ID": requestId, "X-Expected-Version": String(topic.version) },
@@ -1972,8 +1987,7 @@
       }
     });
     document.getElementById("btn-review-submit")?.addEventListener("click", submitReview);
-    document.getElementById("review-implementation-select")?.addEventListener("change", rememberReviewDraft);
-    document.getElementById("review-opinion-input")?.addEventListener("input", rememberReviewDraft);
+    document.getElementById("review-user-opinion-input")?.addEventListener("input", rememberReviewDraft);
     document.getElementById("review-view")?.addEventListener("click", (event) => {
       const choice = event.target.closest?.("[data-review-choice]");
       if (choice) {
@@ -1983,6 +1997,7 @@
         const group = choice.parentElement?.id;
         if (group === "review-workflow-options") draft.workflow_state = choice.dataset.reviewChoice;
         if (group === "review-outcome-options") draft.decision_outcome = choice.dataset.reviewChoice;
+        if (group === "review-implementation-options") draft.implementation_state = choice.dataset.reviewChoice;
         renderReview();
         return;
       }
