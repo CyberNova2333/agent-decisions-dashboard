@@ -610,10 +610,10 @@ body.review-open .app-content > .view-panel { display: none !important; }
 .review-readonly { min-height: 2.6rem; padding: 0.65rem 0.75rem; border-radius: var(--radius-sm); background: var(--bg-input); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
 .review-sidebar { display: flex; min-width: 0; min-height: 0; flex-direction: column; gap: 0.65rem; padding: 1rem; overflow-y: auto; border-left: 1px solid var(--border-subtle); background: var(--bg-sidebar); }
 .review-sidebar-section { padding: 0.65rem; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-card); }
-.review-sidebar-section .review-label { margin-bottom: 0.4rem; font-size: 0.72rem; }
+.review-sidebar-section .review-label { display: block; margin-bottom: 0.4rem; font-size: 0.72rem; }
 .review-context-section { flex-shrink: 0; }
 .review-context-section .review-readonly { max-height: 10rem; overflow-y: auto; font-size: 0.78rem; }
-.review-user-opinion-input { min-height: 12rem; resize: vertical; }
+.review-user-opinion-input { display: block; width: 100%; min-height: 12rem; resize: vertical; font-size: 0.8rem; }
 .review-sidebar-actions { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-top: auto; padding-top: 0.35rem; }
 .review-sidebar-actions .btn { min-width: 0; padding: 0.36rem 0.45rem; font-size: 0.72rem; }
 .review-overview-action { display: inline-flex; width: 4.2rem; min-height: 3rem; flex-direction: column; align-items: center; justify-content: center; gap: 0.05rem; }
