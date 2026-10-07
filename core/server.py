@@ -36,6 +36,7 @@ from core.git_engine import GitEngine
 from core.decision_service import DecisionService, TopicValidationError, IdempotencyConflictError
 from core.recovery import RecoveryManager
 from core.agent_context import AgentContextEngine
+from core.contracts import decision_axes
 from core.locking import ledger_lock
 
 MAX_BODY_SIZE = 10 * 1024 * 1024  # 10MB 最大请求体限制防 DoS
@@ -155,10 +156,11 @@ class DashboardServer:
         """概览是当前议题的投影，不依赖需要另外维护的历史导入表。"""
         settled, pending = [], []
         for topic in topics:
-            wf = topic["workflow_state"]
-            outcome = topic["decision_outcome"]
-            if wf == "decided" and outcome in ("", "accepted", "partially_accepted", "rejected"):
+            wf, outcome = decision_axes(topic)
+            if wf in ("decided", "deferred") and outcome in ("accepted", "partially_accepted", "rejected"):
                 label = "部分同意" if outcome == "partially_accepted" else "已否决" if outcome == "rejected" else "已决策"
+                if wf == "deferred":
+                    label += " · 推迟再议（按原话中的条件继续）"
                 settled.append({"title": topic["title"], "requirement": topic["summary"],
                                 "details": topic["rejection_reason"] if outcome == "rejected" else topic["decision_status"],
                                 "topic_ref": topic["id"], "outcome_label": label})
@@ -349,7 +351,7 @@ def make_handler(server: DashboardServer):
                 settled, pending = server.overview_from_topics(meta_list)
                 res = {
                     "topics": meta_list,
-                    "capabilities": {"edit_latest_round": True, "partially_accepted": True},
+                    "capabilities": {"edit_latest_round": True, "partially_accepted": True, "independent_progress": True},
                     "settled_decisions": settled,
                     "open_questions": pending,
                     "changelog": server.db.get_changelog(),

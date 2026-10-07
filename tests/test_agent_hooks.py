@@ -79,7 +79,9 @@ class AgentHookTests(unittest.TestCase):
         self.app.service.save_topic("a", {"decision_outcome": "deferred"}, expected_version=1)
         context = self.hooks.before_task(topic_id="a")
         self.assertEqual(context["active_decisions"], [])
-        self.assertEqual(context["requested_topic"]["decision_outcome"], "deferred")
+        self.assertEqual(context["requested_topic"]["workflow_state"], "deferred")
+        self.assertEqual(context["requested_topic"]["decision_outcome"], "accepted")
+        self.assertEqual(context["deferred_topics"][0]["decision_outcome"], "accepted")
         self.assertIn("Keep complete requirement", context["requested_topic"]["core_content"])
 
     def test_cli_exit_code_and_outputs(self):

@@ -12,9 +12,9 @@ python -m core.agent_hooks --config /path/to/dashboard.config.json before-task -
 python -m core.agent_hooks --config /path/to/dashboard.config.json before-task --topic adr-storage
 ```
 
-输出是 JSON，包含 `active_decisions`、`rejected_proposals`、`pending_requirements`；其中 `content` 和 `discussion` 是完整记录。按模块匹配 section/object/function 子串；`--path` 匹配正文或 section 子串，不是代码依赖分析。特定议题不存在会报错，不会伪装成无约束。
+输出是 JSON，包含 `active_decisions`、`rejected_proposals`、`pending_requirements`、`deferred_topics`、`superseded_topics`；其中 `content` 和 `discussion` 是完整记录。按模块匹配 section/object/function 子串；`--path` 匹配正文或 section 子串，不是代码依赖分析。特定议题不存在会报错，不会伪装成无约束。
 
-暂缓和已替代议题不列入当前约束清单。指定 `--topic` 时另附 `requested_topic` 完整记录，因此可以追溯这些议题的状态、正文和轮次。
+暂缓和已替代议题分别单列，不混入当前推进清单；指定 `--topic` 时另附 `requested_topic` 原始完整记录。只对 `decided + accepted` 形成当前有效决策，空结论不推断为同意，列入待确认清单也不代表获准实施。
 
 钩子先读取 `/api/status`，比较真实数据库和议题目录与指定配置，并要求一致性检查通过。可以用 `--url http://127.0.0.1:其他端口` 覆盖连接地址，目标目录校验仍生效。仅允许本机 HTTP，禁用代理和重定向。服务须由用户按项目流程启动；钩子不会启动、重建或修复数据。
 
@@ -52,7 +52,11 @@ Path("receipt.json").write_text(json.dumps(receipt, ensure_ascii=False), encodin
 
 仅在用户明确要求修改已提交的最近一轮时，可加 `edit_latest_round: true`。带读取时的版本，只提交需要修改的 `new_user_opinion` 或 `new_agent_reply`，另一方字段省略则保持原文；旧内容留在历史快照中。不得用该参数重写更早轮次，也不能在有新轮次后盲目换版本重试。默认仍使用追加讨论。
 
-部分同意使用 `decision_outcome: "partially_accepted"`，并在用户原话里明确同意与保留的范围。切换到该结论时服务要求非空用户意见，但不自动理解同意范围。此类议题进入 `pending_requirements`，不整项进入 `active_decisions`；若工作流为 `decided`，仍可在页面“已定结论”中看到“部分同意”标注。页面概览与 Agent 清单用途不同，Agent 需按原话逐项理解。
+部分同意使用 `decision_outcome: "partially_accepted"`，并在用户原话里明确同意与保留的范围。切换到该结论时服务要求非空用户意见，但不自动理解同意范围。此类议题在未暂缓或被替代时进入 `pending_requirements`，不整项进入 `active_decisions`；若进展为 `decided` 或 `deferred`，页面“已定结论”会分别标注。页面概览与 Agent 清单用途不同，Agent 需按原话逐项理解。
+
+“是否同意”和“何时继续”分开填写。例如认可“试点结束后再议”，使用 `decision_outcome: "accepted"` 与 `workflow_state: "deferred"`，追加原话保留条件；同意范围是这个安排，不等于立即执行或提前同意未来方案。读取 `deferred_topics` 核对条件，不能忽略暂缓约定。`workflow_state: "superseded"` 保留原结论供追溯，并可填 `superseded_by` 指向替代议题；旧否决在被替代后不再列为当前红线。
+
+旧 `decision_outcome: "deferred" / "superseded"` 原始记录与历史不被自动改写，页面和 Agent 读取时解释为进展，同意状态留空。首次正常保存转成独立字段；旧 API 别名仍可接收，保留已有结论。不要把兼容转换当作新用户答复。
 
 创建使用 `POST /api/topic/create`，传 `id`、`title`、可选 `content_override` 及状态。已有议题省略的字段保留原值；空字符串表示明确清空支持清空的字段。核验使用 `POST /api/topic/:id/verify`，传 `expected_version`、`request_id`、`impl_commit`、`verifier`、`test_summary` 和布尔 `mark_verified`；这只登记调用者提供的证据，服务不替你运行测试。
 

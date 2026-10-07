@@ -337,6 +337,8 @@
     }
     if (lc === "decided") return { badge: "🟢 已决策", badge_class: "badge-decided" };
     if (lc === "pending") return { badge: "🔴 待决策", badge_class: "badge-pending" };
+    if (lc === "deferred") return { badge: "⏳ 推迟再议", badge_class: "badge-discussing" };
+    if (lc === "superseded") return { badge: "📦 已被替代", badge_class: "badge-superseded" };
     return { badge: "🟡 待讨论", badge_class: "badge-discussing" };
   }
 
@@ -344,26 +346,34 @@
     return window.DashboardMarkdown.render(text);
   }
 
-  function getCanonicalOutcome(t) {
+  function getStoredOutcome(t) {
     if (typeof t.decision_outcome === "string") return t.decision_outcome;
     if (t.decision_outcome) {
       return t.decision_outcome;
     }
     const status = String(t.decision_status || "");
-    if (status.includes("非否决")) return (t.workflow_state || t.lifecycle_status) === "decided" ? "accepted" : "";
+    if (status.includes("非否决")) return "";
     if (status.includes("否决")) return "rejected";
     if (status.includes("部分同意")) return "partially_accepted";
-    if (status.includes("已定") || status.includes("采纳")) return "accepted";
+    if (status.includes("采纳") || status.includes("已同意")) return "accepted";
     if (status.includes("推迟") || status.includes("暂缓")) return "deferred";
     if (status.includes("替代")) return "superseded";
-    const wf = t.workflow_state || t.lifecycle_status;
-    if (wf === "decided") return "accepted";
     return "";
+  }
+
+  function getCanonicalOutcome(t) {
+    const outcome = getStoredOutcome(t);
+    return ["deferred", "superseded"].includes(outcome) ? "" : outcome;
+  }
+
+  function getCanonicalWorkflow(t) {
+    const outcome = getStoredOutcome(t);
+    return ["deferred", "superseded"].includes(outcome) ? outcome : t.workflow_state || t.lifecycle_status || "discussing";
   }
 
   function getFilteredTopics() {
     return state.topicsMeta.filter((t) => {
-      const wf = t.workflow_state || t.lifecycle_status || "discussing";
+      const wf = getCanonicalWorkflow(t);
       if (state.filters.lifecycle !== "all" && wf !== state.filters.lifecycle) {
         return false;
       }
@@ -418,7 +428,7 @@
 
     container.innerHTML = filtered
       .map((t) => {
-        const wf = t.workflow_state || t.lifecycle_status || "discussing";
+        const wf = getCanonicalWorkflow(t);
         const lcInfo = getLifecycleBadge(wf);
         const rounds = t.rounds_count ?? 0;
         const ver = t.version || 1;
@@ -438,11 +448,15 @@
 
         // Rejection Banner
         let rejectionHtml = "";
+        const replacement = t.superseded_by || "";
+        const replacementHtml = /^[a-zA-Z0-9_-]{1,128}$/.test(replacement)
+          ? `<a href="#${escapeHtml(replacement)}">${escapeHtml(replacement)}</a>` : escapeHtml(replacement);
         if (isRejected) {
+          const rejectionLabel = wf === "superseded" ? "历史否决记录" : wf === "deferred" ? "暂缓议题的否决记录" : "明确否决红线";
           rejectionHtml = `
             <div class="rejection-box">
-              <strong>❌ 明确否决红线：</strong> ${escapeHtml(t.rejection_reason || "用户或团队已明确否决此方案，严禁重新提议")}
-              ${t.superseded_by ? `<div style="font-size: 0.75rem; margin-top: 0.2rem; color: var(--text-dim);">替代议题：<code>#${escapeHtml(t.superseded_by)}</code></div>` : ""}
+              <strong>❌ ${rejectionLabel}：</strong> ${escapeHtml(t.rejection_reason || "用户或团队已明确否决此方案")}
+              ${replacement && wf !== "superseded" ? `<div style="font-size: 0.75rem; margin-top: 0.2rem; color: var(--text-dim);">替代议题：${replacementHtml}</div>` : ""}
             </div>
           `;
         }
@@ -451,6 +465,8 @@
         <div class="topic-card" id="card-${escapeHtml(t.id)}">
           <div class="card-meta-line">
             <span class="badge ${escapeHtml(lcInfo.badge_class)}">${escapeHtml(lcInfo.badge)}</span>
+            ${getCanonicalOutcome(t) === "accepted" ? '<span class="badge badge-decided">✓ 已同意</span>' : ""}
+            ${getCanonicalOutcome(t) === "" ? '<span class="badge badge-superseded">尚无结论</span>' : ""}
             ${isRejected ? `<span class="badge badge-rejected">❌ 方案已否决</span>` : ""}
             ${getCanonicalOutcome(t) === "partially_accepted" ? '<span class="badge badge-partial">◐ 部分同意</span>' : ""}
             ${implBadge}
@@ -470,6 +486,8 @@
           </div>
 
           ${rejectionHtml}
+          ${wf === "deferred" ? '<p class="form-label">⏳ 按原话中的时间或条件继续；同意此安排不代表立即实施。</p>' : ""}
+          ${wf === "superseded" ? `<p class="form-label">📦 原结论仅供追溯。${replacement ? `替代议题：${replacementHtml}` : "可在记录决策中填写替代议题。"}</p>` : ""}
 
           <!-- Dynamic Markdown body -->
           <div id="detail-body-${escapeHtml(t.id)}" style="display: none; border-top: 1px dashed var(--border-subtle); padding-top: 0.8rem;"></div>
@@ -600,14 +618,13 @@
   }
 
   function updateSidebarCounts() {
-    let decided = 0, discussing = 0, pending = 0, rejected = 0;
+    const workflowCounts = { decided: 0, discussing: 0, pending: 0, deferred: 0, superseded: 0 };
+    let rejected = 0;
     const objCounts = Object.create(null);
 
     state.topicsMeta.forEach((t) => {
-      const wf = t.workflow_state || t.lifecycle_status || "discussing";
-      if (wf === "decided") decided++;
-      else if (wf === "pending") pending++;
-      else discussing++;
+      const wf = getCanonicalWorkflow(t);
+      if (Object.prototype.hasOwnProperty.call(workflowCounts, wf)) workflowCounts[wf]++;
 
       if (getCanonicalOutcome(t) === "rejected") {
         rejected++;
@@ -619,9 +636,10 @@
 
     document.getElementById("count-topics").innerText = state.topicsMeta.length;
     document.getElementById("pill-count-all").innerText = state.topicsMeta.length;
-    document.getElementById("pill-count-decided").innerText = decided;
-    document.getElementById("pill-count-discussing").innerText = discussing;
-    document.getElementById("pill-count-pending").innerText = pending;
+    for (const [workflow, count] of Object.entries(workflowCounts)) {
+      const el = document.getElementById(`pill-count-${workflow}`);
+      if (el) el.innerText = count;
+    }
     
     const rejEl = document.getElementById("pill-count-rejected");
     if (rejEl) rejEl.innerText = rejected;
@@ -703,6 +721,8 @@
   }
 
   function onOutcomeChanged() {
+    const replaced = document.getElementById("group-superseded-by");
+    if (replaced) replaced.style.display = document.getElementById("form-workflow-state").value === "superseded" ? "block" : "none";
     const outcome = document.getElementById("form-decision-outcome").value;
     const group = document.getElementById("group-rejection-reason");
     if (group) {
@@ -714,6 +734,7 @@
     { key: "workflow_state", id: "form-workflow-state", label: "工作流状态" },
     { key: "decision_outcome", id: "form-decision-outcome", label: "决策结果" },
     { key: "rejection_reason", id: "form-rejection-reason", label: "否决原因" },
+    { key: "superseded_by", id: "form-superseded-by", label: "替代议题" },
     { key: "implementation_state", id: "form-impl-state", label: "实现状态" },
     { key: "impl_commit", id: "form-impl-commit", label: "实现 Commit / PR" },
   ];
@@ -725,16 +746,17 @@
   const READ_ONLY_FIELDS = [
     ["title", "标题"], ["object", "对象分类"], ["function", "功能分类"],
     ["section", "章节"], ["priority", "优先级"],
-    ["impl_verifier", "核验人 / 核验证据"], ["superseded_by", "替代议题"],
+    ["impl_verifier", "核验人 / 核验证据"],
   ];
 
   function valuesFromMeta(meta) {
-    const workflow = meta.workflow_state || meta.lifecycle_status || "discussing";
+    const workflow = getCanonicalWorkflow(meta);
     const outcome = getCanonicalOutcome(meta);
     return {
       workflow_state: workflow,
       decision_outcome: outcome,
       rejection_reason: meta.rejection_reason || "",
+      superseded_by: meta.superseded_by || "",
       implementation_state: meta.implementation_state || "not_started",
       impl_commit: meta.impl_commit || "",
       new_user_opinion: meta.latest_round_user_opinion ?? meta.last_user_opinion ?? "",
@@ -1125,8 +1147,7 @@
     const initial = valuesFromMeta(meta);
     const unchangedDecision = wf === initial.workflow_state && outcome === initial.decision_outcome;
     const decisionStatus = unchangedDecision && meta.decision_status ? meta.decision_status :
-      outcome === "partially_accepted" ? "部分同意" : outcome === "rejected" ? "已否决" : outcome === "superseded" ? "已替代" :
-        outcome === "deferred" ? "暂缓" : wf === "decided" ? "已定" : "待定";
+      outcome === "partially_accepted" ? "部分同意" : outcome === "rejected" ? "已否决" : outcome === "accepted" ? "已同意" : "尚无结论";
     return {
       title: meta.title,
       object: meta.object ?? "通用系统", function: meta.function ?? "核心规范",
@@ -1135,7 +1156,7 @@
       decision_outcome: outcome, rejection_reason: draft.rejection_reason.trim(),
       implementation_state: draft.implementation_state, impl_commit: draft.impl_commit.trim(),
       // Carry the metadata the user reviewed with this version.
-      impl_verifier: meta.impl_verifier ?? "", superseded_by: meta.superseded_by ?? "",
+      impl_verifier: meta.impl_verifier ?? "", superseded_by: draft.superseded_by.trim(),
       new_user_opinion: draft.new_user_opinion.trim(), new_agent_reply: draft.new_agent_reply.trim(),
       commit_message: draft.commit_message.trim(), expected_version: meta.version, request_id: requestId,
       ...(session.mode === "amend" ? { edit_latest_round: true } : {}),
@@ -1155,6 +1176,10 @@
     }
     rememberDraft(session);
     if (!session.request) {
+      if (["deferred", "superseded"].includes(session.draft.workflow_state) && !state.capabilities.independent_progress) {
+        showToast("当前服务尚未支持独立的议题进展，请保存草稿文本后重启服务并刷新页面。", "warning");
+        return;
+      }
       if (!session.draft.commit_message.trim()) {
         showToast("请输入 Git 变更提交说明。", "warning");
         return;

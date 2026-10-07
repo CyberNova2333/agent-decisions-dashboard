@@ -27,7 +27,7 @@
       "name": "已决策",
       "badge": "🟢 已决策",
       "badge_class": "badge-decided",
-      "description": "双方已明确拍板，形成不可推翻红线，不再重提"
+      "description": "本轮已有明确决定；是否同意与实现状态分别记录"
     },
     {
       "id": "discussing",
@@ -42,6 +42,20 @@
       "badge": "🔴 待决策",
       "badge_class": "badge-pending",
       "description": "存在方案选型、卡点或分歧，等待明确拍板"
+    },
+    {
+      "id": "deferred",
+      "name": "推迟再议",
+      "badge": "⏳ 推迟再议",
+      "badge_class": "badge-discussing",
+      "description": "按原话中的时间或条件继续；同意结论独立保留"
+    },
+    {
+      "id": "superseded",
+      "name": "已被替代",
+      "badge": "📦 已被替代",
+      "badge_class": "badge-superseded",
+      "description": "由新议题接替；原结论仅供追溯"
     }
   ]
 }
