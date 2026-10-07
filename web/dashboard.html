@@ -201,44 +201,43 @@
           <span class="review-topic-id" id="review-topic-id">#topic</span>
           <h2 id="review-topic-title">阅卷视图</h2>
         </div>
-        <div class="review-header-actions">
-          <div class="review-choice-block review-choice-block-compact">
+        <button class="btn btn-secondary review-close" id="btn-review-close" type="button">返回看板</button>
+      </header>
+
+      <div class="review-content">
+        <main class="review-topic-pane">
+          <div class="review-topic-meta" id="review-topic-meta"></div>
+          <div class="review-expanded-detail" id="review-detail-body" aria-live="polite"></div>
+        </main>
+
+        <aside class="review-sidebar" aria-label="议题处理侧栏">
+          <div class="review-sidebar-section">
             <div class="review-label">议题进展</div>
             <div class="review-choice-group" id="review-workflow-options" role="group" aria-label="议题进展"></div>
           </div>
-          <div class="review-choice-block review-choice-block-compact">
+          <div class="review-sidebar-section">
             <div class="review-label">决策结论</div>
             <div class="review-choice-group" id="review-outcome-options" role="group" aria-label="决策结论"></div>
           </div>
-          <button class="btn btn-secondary review-close" id="btn-review-close" type="button">返回看板</button>
-        </div>
-      </header>
-
-      <div class="review-body">
-        <div class="review-topic-meta" id="review-topic-meta"></div>
-
-        <div class="review-implementation">
-          <label class="review-label" for="review-implementation-select">实现状态</label>
-          <select class="form-select" id="review-implementation-select">
-            <option value="not_started">未开始</option>
-            <option value="in_progress">进行中</option>
-            <option value="implemented">已实现</option>
-            <option value="verified">已核验</option>
-          </select>
-        </div>
-
-        <div class="review-latest-opinion">
-          <div class="review-label">最近一轮用户意见（只读原话）</div>
-          <div class="review-readonly" id="review-user-opinion">暂无原话记录</div>
-        </div>
-
-        <div class="review-edit-opinion">
-          <label class="review-label" for="review-opinion-input">修改意见 / Agent 落实说明</label>
-          <textarea class="form-textarea" id="review-opinion-input" rows="5" placeholder="修改最近一轮答复；保存后原文会留在版本历史中"></textarea>
-        </div>
-
-        <div class="review-expanded-detail" id="review-detail-body" aria-live="polite"></div>
-
+          <div class="review-sidebar-section">
+            <div class="review-label">实现状态</div>
+            <div class="review-choice-group" id="review-implementation-options" role="group" aria-label="实现状态"></div>
+          </div>
+          <div class="review-sidebar-section review-context-section">
+            <div class="review-label">上一轮 Agent 回复（只读）</div>
+            <div class="review-readonly" id="review-agent-reply">暂无 Agent 回复</div>
+          </div>
+          <div class="review-sidebar-section review-context-section">
+            <label class="review-label" for="review-user-opinion-input">本轮用户意见</label>
+            <textarea class="form-textarea review-user-opinion-input" id="review-user-opinion-input" rows="4" placeholder="补充或修正本轮用户意见原话"></textarea>
+          </div>
+          <div class="review-sidebar-actions">
+            <button class="btn btn-secondary" id="btn-review-overview" type="button" aria-expanded="false">议题总览</button>
+            <button class="btn btn-secondary" id="btn-review-previous" type="button">← 上一个</button>
+            <button class="btn btn-secondary" id="btn-review-next" type="button">下一个 →</button>
+            <button class="btn btn-primary" id="btn-review-submit" type="button">提交当前议题</button>
+          </div>
+        </aside>
       </div>
 
       <div class="review-overview-panel" id="review-overview-panel" aria-hidden="true">
@@ -251,12 +250,6 @@
 
       <footer class="review-footer">
         <span class="review-save-status" id="review-save-status" role="status"></span>
-        <div class="review-footer-actions">
-          <button class="btn btn-secondary" id="btn-review-overview" type="button" aria-expanded="false">议题总览</button>
-          <button class="btn btn-secondary" id="btn-review-previous" type="button">← 上一个</button>
-          <button class="btn btn-secondary" id="btn-review-next" type="button">下一个 →</button>
-          <button class="btn btn-primary" id="btn-review-submit" type="button">提交当前议题</button>
-        </div>
       </footer>
     </div>
   </section>
