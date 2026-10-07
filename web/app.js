@@ -1512,6 +1512,10 @@
       showToast("明确否决方案时，必须先在完整编辑器中填写否决原因。", "warning");
       return;
     }
+    if (draft.decision_outcome === "partially_accepted" && getCanonicalOutcome(topic) !== "partially_accepted" && !String(draft.new_user_opinion || "").trim()) {
+      showToast("部分同意需要在本轮用户意见中说明同意和保留的部分。", "warning");
+      return;
+    }
     state.review.saving = true;
     renderReview();
     try {
