@@ -188,39 +188,34 @@
         <h2 style="margin-bottom: 1rem; font-size: 1.2rem;">📝 变更记录与审计日志</h2>
         <div id="changelog-container"></div>
       </section>
-    </main>
-  </div>
-
-  <!-- View: Full-screen review sheet -->
+    <!-- View: Review sheet. The global banner and sidebar stay visible while this main-area view is active. -->
   <section id="review-view" class="review-view" aria-hidden="true">
     <div class="review-shell">
       <header class="review-header">
         <div class="review-counter" aria-label="当前议题序号">
           <span class="review-index" id="review-index">01</span>
           <span class="review-counter-separator">/</span>
-          <span class="review-total" id="review-total">42</span>
+          <span class="review-total" id="review-total">00</span>
         </div>
         <div class="review-heading">
           <span class="review-topic-id" id="review-topic-id">#topic</span>
           <h2 id="review-topic-title">阅卷视图</h2>
         </div>
-        <button class="btn btn-secondary" id="btn-review-close" type="button">返回看板</button>
+        <div class="review-header-actions">
+          <div class="review-choice-block review-choice-block-compact">
+            <div class="review-label">议题进展</div>
+            <div class="review-choice-group" id="review-workflow-options" role="group" aria-label="议题进展"></div>
+          </div>
+          <div class="review-choice-block review-choice-block-compact">
+            <div class="review-label">决策结论</div>
+            <div class="review-choice-group" id="review-outcome-options" role="group" aria-label="决策结论"></div>
+          </div>
+          <button class="btn btn-secondary review-close" id="btn-review-close" type="button">返回看板</button>
+        </div>
       </header>
 
       <div class="review-body">
         <div class="review-topic-meta" id="review-topic-meta"></div>
-        <div class="review-core" id="review-core"></div>
-
-        <div class="review-choice-grid">
-          <div class="review-choice-block">
-            <div class="review-label">议题进展（何时继续）</div>
-            <div class="review-choice-group" id="review-workflow-options" role="group" aria-label="议题进展"></div>
-          </div>
-          <div class="review-choice-block">
-            <div class="review-label">决策结论（是否同意）</div>
-            <div class="review-choice-group" id="review-outcome-options" role="group" aria-label="决策结论"></div>
-          </div>
-        </div>
 
         <div class="review-implementation">
           <label class="review-label" for="review-implementation-select">实现状态</label>
@@ -242,21 +237,32 @@
           <textarea class="form-textarea" id="review-opinion-input" rows="5" placeholder="修改最近一轮答复；保存后原文会留在版本历史中"></textarea>
         </div>
 
+        <div class="review-expanded-detail" id="review-detail-body" aria-live="polite"></div>
+
+      </div>
+
+      <div class="review-overview-panel" id="review-overview-panel" aria-hidden="true">
         <div class="review-overview-heading">
-          <span>议题总览</span>
-          <span class="review-overview-hint">全部议题按当前列表顺序排列</span>
+          <strong>议题总览</strong>
+          <span class="review-overview-hint">按当前看板顺序排列</span>
         </div>
         <div class="review-overview" id="review-overview"></div>
       </div>
 
       <footer class="review-footer">
-        <button class="btn btn-secondary" id="btn-review-previous" type="button">← 上一个</button>
-        <button class="btn btn-secondary" id="btn-review-next" type="button">下一个 →</button>
         <span class="review-save-status" id="review-save-status" role="status"></span>
-        <button class="btn btn-primary" id="btn-review-submit" type="button">提交当前议题</button>
+        <div class="review-footer-actions">
+          <button class="btn btn-secondary" id="btn-review-overview" type="button" aria-expanded="false">议题总览</button>
+          <button class="btn btn-secondary" id="btn-review-previous" type="button">← 上一个</button>
+          <button class="btn btn-secondary" id="btn-review-next" type="button">下一个 →</button>
+          <button class="btn btn-primary" id="btn-review-submit" type="button">提交当前议题</button>
+        </div>
       </footer>
     </div>
   </section>
+
+    </main>
+  </div>
 
   <div class="modal-backdrop" id="modal-create-topic">
     <div class="modal-card">
