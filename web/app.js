@@ -1332,6 +1332,8 @@
     if (draft) return draft;
     const values = valuesFromMeta(topic);
     const mode = Number(topic.rounds_count) > 0 ? "amend" : "append";
+    const agentQuestion = window.DashboardAgentQuestion.parse(values.new_agent_reply);
+    const answer = window.DashboardAgentQuestion.splitSaved(agentQuestion.question, values.new_user_opinion);
     draft = {
       topicId: topic.id,
       mode,
@@ -1342,14 +1344,42 @@
       rejection_reason: values.rejection_reason,
       superseded_by: values.superseded_by,
       impl_commit: values.impl_commit,
-      new_user_opinion: values.new_user_opinion,
+      new_user_opinion: answer.text,
       new_agent_reply: values.new_agent_reply,
+      agent_question: agentQuestion,
+      agent_question_selected: answer.selected,
       commit_message: mode === "amend"
         ? `更正第 ${topic.rounds_count} 轮回复 [${topic.title}]`
         : `第 1 轮决策：确认 [${topic.title}]`,
     };
     state.review.drafts.set(topic.id, draft);
     return draft;
+  }
+
+  function reviewOpinion(draft) {
+    return window.DashboardAgentQuestion.compose(draft.agent_question?.question || null, draft.agent_question_selected, draft.new_user_opinion);
+  }
+
+  function renderAgentQuestion(draft) {
+    const container = document.getElementById("review-agent-question");
+    if (!container) return;
+    const parsed = draft.agent_question?.question;
+    if (!parsed) {
+      container.hidden = true;
+      container.innerHTML = "";
+      return;
+    }
+    const selected = Number.isInteger(draft.agent_question_selected) && draft.agent_question_selected >= 0
+      ? draft.agent_question_selected : null;
+    draft.agent_question_selected = selected;
+    container.hidden = false;
+    container.innerHTML = `
+      <div class="review-agent-question-title">${escapeHtml(parsed.question)}</div>
+      <div class="review-agent-question-options" role="group" aria-label="Agent 提供的选项（单选，可不选）">
+        ${parsed.options.map((option, index) => `<button type="button" class="review-agent-question-option${selected === index ? " selected" : ""}" data-agent-question-option="${index}" aria-pressed="${selected === index ? "true" : "false"}"${state.review.saving ? " disabled" : ""}><span>${escapeHtml(option.label)}</span>${option.description ? `<span class="review-agent-question-description">${escapeHtml(option.description)}</span>` : ""}</button>`).join("")}
+      </div>
+      <div class="review-agent-question-hint">${selected === null ? "可选择一项并在下方补充，也可以只填写用户意见。" : "所选答案将随本轮用户意见提交；可在下方继续补充，再点选中项可取消。"}</div>
+    `;
   }
 
   function renderReviewChoiceGroup(containerId, options, selected) {
@@ -1412,7 +1442,9 @@
     }
     if (button) {
       button.setAttribute("aria-expanded", state.review.overviewOpen ? "true" : "false");
-      button.textContent = state.review.overviewOpen ? "收起总览" : "议题总览";
+      const caption = button.querySelector(".review-action-caption");
+      if (caption) caption.textContent = state.review.overviewOpen ? "收起总览" : "议题总览";
+      button.title = state.review.overviewOpen ? "收起议题总览" : "打开议题总览";
     }
   }
 
@@ -1446,7 +1478,12 @@
     const userOpinion = document.getElementById("review-user-opinion-input");
     if (userOpinion && document.activeElement !== userOpinion) userOpinion.value = draft.new_user_opinion || "";
     const agentReply = document.getElementById("review-agent-reply");
-    if (agentReply) agentReply.textContent = draft.new_agent_reply || "暂无 Agent 回复";
+    if (agentReply) {
+      const agentQuestion = draft.agent_question || { cleanReply: draft.new_agent_reply || "", question: null };
+      agentReply.textContent = agentQuestion.cleanReply || "暂无 Agent 回复";
+      agentReply.hidden = Boolean(agentQuestion.question) && !agentQuestion.cleanReply;
+    }
+    renderAgentQuestion(draft);
     const status = document.getElementById("review-save-status");
     if (status) status.textContent = draft.mode === "amend" ? "可修改本轮用户意见；上一轮 Agent 回复只读，原文保留在版本历史中。" : "该议题尚无讨论轮次，提交将记录本轮用户意见。";
     const overview = document.getElementById("review-overview");
@@ -1530,7 +1567,7 @@
       const session = { base: { ...topic }, draft, mode: draft.mode, topicId: topic.id };
       const payload = decisionPayload(session, requestId);
       const originalOpinion = String(valuesFromMeta(topic).new_user_opinion || "").trim();
-      const currentOpinion = String(draft.new_user_opinion || "").trim();
+      const currentOpinion = reviewOpinion(draft).trim();
       const opinionChanged = currentOpinion !== originalOpinion;
       delete payload.new_agent_reply;
       delete payload.edit_latest_round;
@@ -1993,6 +2030,18 @@
     document.getElementById("btn-review-submit")?.addEventListener("click", submitReview);
     document.getElementById("review-user-opinion-input")?.addEventListener("input", rememberReviewDraft);
     document.getElementById("review-view")?.addEventListener("click", (event) => {
+      const agentOption = event.target.closest?.("[data-agent-question-option]");
+      if (agentOption) {
+        const topic = reviewTopics()[state.review.index];
+        if (!topic || state.review.saving) return;
+        rememberReviewDraft();
+        const draft = reviewDraftFor(topic);
+        const selected = Number(agentOption.dataset.agentQuestionOption);
+        if (!Number.isInteger(selected) || !draft.agent_question?.question?.options[selected]) return;
+        draft.agent_question_selected = draft.agent_question_selected === selected ? null : selected;
+        renderAgentQuestion(draft);
+        return;
+      }
       const choice = event.target.closest?.("[data-review-choice]");
       if (choice) {
         const topic = reviewTopics()[state.review.index];
