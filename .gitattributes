@@ -1,0 +1,2 @@
+# Preserve the upstream distribution byte-for-byte; review its pinned source/hash.
+web/vendor/*.min.js -text -diff -whitespace

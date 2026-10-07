@@ -50,6 +50,10 @@ Path("receipt.json").write_text(json.dumps(receipt, ensure_ascii=False), encodin
 
 只有在该操作获用户授权、原话与回应已确定时执行。示例中具体文本不是用户意见，不要原样登记进真实台账。独立新操作分配新 ID；超时重试读取之前保存的 request.json，不重新获取最新版本、不生成新 ID。相同键携带不同内容会被拒绝。
 
+仅在用户明确要求修改已提交的最近一轮时，可加 `edit_latest_round: true`。带读取时的版本，只提交需要修改的 `new_user_opinion` 或 `new_agent_reply`，另一方字段省略则保持原文；旧内容留在历史快照中。不得用该参数重写更早轮次，也不能在有新轮次后盲目换版本重试。默认仍使用追加讨论。
+
+部分同意使用 `decision_outcome: "partially_accepted"`，并在用户原话里明确同意与保留的范围。此状态不代表整个提案成为执行要求，Agent 需按原话逐项理解。
+
 创建使用 `POST /api/topic/create`，传 `id`、`title`、可选 `content_override` 及状态。已有议题省略的字段保留原值；空字符串表示明确清空支持清空的字段。核验使用 `POST /api/topic/:id/verify`，传 `expected_version`、`request_id`、`impl_commit`、`verifier`、`test_summary` 和布尔 `mark_verified`；这只登记调用者提供的证据，服务不替你运行测试。
 
 ## 3. 核对写入结果

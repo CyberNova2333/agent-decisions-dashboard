@@ -4,13 +4,52 @@
 (function () {
   "use strict";
 
+  const appearanceStorageKey = "agent-decisions-dashboard.appearance";
+  const appearance = { mode: "light", accent: "pink" };
+  const accentNames = ["pink", "blue", "violet", "teal", "amber"];
+  try {
+    // Preserve the workspace board's previous light/dark preference when present.
+    const legacyMode = localStorage.getItem("madoka_theme");
+    if (["dark", "light"].includes(legacyMode)) appearance.mode = legacyMode;
+    const saved = JSON.parse(localStorage.getItem(appearanceStorageKey));
+    if (saved && ["dark", "light"].includes(saved.mode)) appearance.mode = saved.mode;
+    if (saved && accentNames.includes(saved.accent)) appearance.accent = saved.accent;
+  } catch (_) { /* Storage can be unavailable or contain invalid data. */ }
+
+  function applyAppearance(persist = false) {
+    document.body.dataset.theme = appearance.mode;
+    document.body.dataset.accent = appearance.accent;
+    const picker = document.getElementById("theme-accent");
+    if (picker) picker.value = appearance.accent;
+    const toggle = document.getElementById("btn-toggle-theme");
+    if (toggle) {
+      const label = appearance.mode === "dark" ? "切换为浅色模式" : "切换为深色模式";
+      toggle.title = label;
+      toggle.setAttribute("aria-label", label);
+      toggle.textContent = appearance.mode === "dark" ? "☀️" : "🌙";
+    }
+    if (persist) {
+      try { localStorage.setItem(appearanceStorageKey, JSON.stringify(appearance)); }
+      catch (_) { /* Keep the selected appearance for this tab when storage is blocked. */ }
+    }
+  }
+  // Apply before loading data; changing appearance never re-renders editor drafts.
+  applyAppearance();
+
   const state = {
     config: {},
+    capabilities: {},
     topicsMeta: [],
     settledDecisions: [],
     openQuestions: [],
     changelog: [],
     topicsDetailCache: Object.create(null),
+    detailRequests: new Map(),
+    detailQueue: [],
+    detailActive: 0,
+    expandedTopics: new Set(),
+    metadataRequest: 0,
+    expansionRequest: 0,
     editSession: null,
     createRequest: null,
     creating: false,
@@ -84,12 +123,18 @@
 
   // Two-Stage Loading: 1. Load Metadata List
   async function loadMetadataList() {
+    const request = ++state.metadataRequest;
     try {
       const res = await fetch("/api/topics", { cache: "no-store" });
       if (res.ok) {
         const data = await res.json();
+        if (request !== state.metadataRequest) return false;
         if (!Array.isArray(data.topics)) throw new Error("议题列表响应格式无效");
+        for (const topic of data.topics) {
+          if (state.topicsDetailCache[topic.id]?.version !== topic.version) delete state.topicsDetailCache[topic.id];
+        }
         state.topicsMeta = data.topics;
+        state.capabilities = data.capabilities || {};
         state.hasLoadedTopics = true;
         state.settledDecisions = data.settled_decisions || [];
         state.openQuestions = data.open_questions || [];
@@ -110,6 +155,7 @@
     }
 
     // A failed refresh must not replace already loaded data with demo records.
+    if (request !== state.metadataRequest) return false;
     updateServerStatus(false);
     if (!state.hasLoadedTopics && window.DASHBOARD_DEFAULT_DATA) {
       const def = window.DASHBOARD_DEFAULT_DATA;
@@ -236,6 +282,26 @@
 
   // Two-Stage Loading: 2. On-Demand Fetch Single Topic Markdown
   async function fetchTopicDetail(topicId) {
+    const key = `${topicId}@${state.topicsMeta.find(t => t.id === topicId)?.version}`;
+    if (state.detailRequests.has(key)) return state.detailRequests.get(key);
+    const request = new Promise((resolve, reject) => {
+      state.detailQueue.push(() => readTopicDetail(topicId).then(resolve, reject));
+    });
+    state.detailRequests.set(key, request);
+    pumpDetailQueue();
+    try { return await request; }
+    finally { if (state.detailRequests.get(key) === request) state.detailRequests.delete(key); }
+  }
+
+  function pumpDetailQueue() {
+    while (state.detailActive < 4 && state.detailQueue.length) {
+      const task = state.detailQueue.shift();
+      state.detailActive++;
+      task().finally(() => { state.detailActive--; pumpDetailQueue(); });
+    }
+  }
+
+  async function readTopicDetail(topicId) {
     if (state.topicsDetailCache[topicId]) {
       return state.topicsDetailCache[topicId];
     }
@@ -244,7 +310,7 @@
       const res = await fetch(topicPath(topicId), { cache: "no-store" });
       if (res.ok) {
         const detail = await res.json();
-        state.topicsDetailCache[topicId] = detail;
+        if (detail.version === state.topicsMeta.find(t => t.id === topicId)?.version) state.topicsDetailCache[topicId] = detail;
         return detail;
       }
     } catch (e) {
@@ -275,16 +341,7 @@
   }
 
   function renderMarkdown(text) {
-    if (!text) return "";
-    let html = escapeHtml(text);
-    // bold
-    html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-    // inline code
-    html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
-    // lists
-    html = html.replace(/^- (.*$)/gim, "<li>$1</li>");
-    html = html.replace(/\n\n/g, "<br><br>");
-    return html;
+    return window.DashboardMarkdown.render(text);
   }
 
   function getCanonicalOutcome(t) {
@@ -295,6 +352,7 @@
     const status = String(t.decision_status || "");
     if (status.includes("非否决")) return (t.workflow_state || t.lifecycle_status) === "decided" ? "accepted" : "";
     if (status.includes("否决")) return "rejected";
+    if (status.includes("部分同意")) return "partially_accepted";
     if (status.includes("已定") || status.includes("采纳")) return "accepted";
     if (status.includes("推迟") || status.includes("暂缓")) return "deferred";
     if (status.includes("替代")) return "superseded";
@@ -343,6 +401,7 @@
     }
 
     if (filtered.length === 0) {
+      updateExpandButton();
       container.innerHTML = `
         <div style="grid-column: 1/-1; text-align: center; padding: 4rem 1rem; color: var(--text-dim);">
           <div style="font-size: 2.5rem; margin-bottom: 0.8rem;">🔍</div>
@@ -368,7 +427,7 @@
         const implState = t.implementation_state || t.impl_status || "not_started";
 
         // Implementation Badge
-        let implBadge = "";
+        let implBadge = '<span class="badge badge-superseded">实现：未开始</span>';
         if (implState === "verified") {
           implBadge = `<span class="badge badge-verified" title="记录为已核验，证据由提交者提供">🧪 已核验</span>`;
         } else if (implState === "implemented") {
@@ -393,6 +452,7 @@
           <div class="card-meta-line">
             <span class="badge ${escapeHtml(lcInfo.badge_class)}">${escapeHtml(lcInfo.badge)}</span>
             ${isRejected ? `<span class="badge badge-rejected">❌ 方案已否决</span>` : ""}
+            ${getCanonicalOutcome(t) === "partially_accepted" ? '<span class="badge badge-partial">◐ 部分同意</span>' : ""}
             ${implBadge}
             <span class="chip">#${escapeHtml(t.id)}</span>
             <span class="chip">v${escapeHtml(ver)}</span>
@@ -404,7 +464,9 @@
           <h3 class="card-title" data-action="toggle" data-topic-id="${escapeHtml(t.id)}">${escapeHtml(t.title)}</h3>
           
           <div class="card-summary">
-            ${renderMarkdown(t.summary ? t.summary + "..." : "")}
+            ${/^\s*(`{3,}|~{3,})/.test(t.summary || "")
+              ? "正文以图表或代码开头，展开详情查看。"
+              : renderMarkdown(t.summary ? t.summary + "..." : "")}
           </div>
 
           ${rejectionHtml}
@@ -416,15 +478,15 @@
           <div class="discussion-box">
             <div class="discussion-title">
               <span>💬 最新决策记录（第 ${escapeHtml(rounds)} 轮）</span>
-              <button class="btn btn-secondary" style="font-size: 0.72rem; padding: 0.2rem 0.5rem;" data-action="edit" data-topic-id="${escapeHtml(t.id)}">✏️ 确定决策</button>
+              ${rounds && state.capabilities.edit_latest_round ? `<button class="btn btn-secondary" style="font-size: 0.72rem; padding: 0.2rem 0.5rem;" data-action="amend" data-topic-id="${escapeHtml(t.id)}">✏️ 修改本轮</button>` : ""}
             </div>
             <div class="discussion-row">
               <div class="discussion-label">💡 用户意见：</div>
-              <div style="color: var(--text-main);">${renderMarkdown(t.last_user_opinion || "暂无原话记录")}</div>
+              <div style="color: var(--text-main);">${renderMarkdown((t.latest_round_user_opinion ?? t.last_user_opinion) || "暂无原话记录")}</div>
             </div>
             <div class="discussion-row">
               <div class="discussion-label">🤖 落实答复：</div>
-              <div style="color: var(--text-main);">${renderMarkdown(t.last_agent_reply || "—")}</div>
+              <div style="color: var(--text-main);">${renderMarkdown((t.latest_round_agent_reply ?? t.last_agent_reply) || "—")}</div>
             </div>
             ${t.impl_commit ? `
               <div class="discussion-row" style="font-size: 0.75rem; color: var(--text-dim); border-top: 1px dashed var(--border-subtle); padding-top: 0.3rem;">
@@ -448,15 +510,57 @@
       `;
       })
       .join("");
+    refreshExpandedCards();
+    updateExpandButton();
+  }
+
+  function updateExpandButton() {
+    const button = document.getElementById("btn-toggle-all");
+    if (!button) return;
+    const topics = getFilteredTopics();
+    button.disabled = topics.length === 0;
+    button.textContent = topics.length && topics.every(t => state.expandedTopics.has(t.id)) ? "收起全部" : "展开全部";
+  }
+
+  async function refreshExpandedCards() {
+    const generation = ++state.expansionRequest;
+    const pending = getFilteredTopics().filter(t => state.expandedTopics.has(t.id));
+    // Bound simultaneous detail reads; a later render/collapse cancels the queue.
+    await Promise.all(Array.from({ length: Math.min(4, pending.length) }, async () => {
+      while (pending.length && generation === state.expansionRequest) {
+        const topic = pending.shift();
+        if (state.expandedTopics.has(topic.id)) await setCardExpanded(topic.id, true);
+      }
+    }));
+  }
+
+  function toggleAllCards() {
+    const topics = getFilteredTopics();
+    const collapse = topics.every(t => state.expandedTopics.has(t.id));
+    ++state.expansionRequest;
+    for (const topic of topics) {
+      if (collapse) { state.expandedTopics.delete(topic.id); setCardExpanded(topic.id, false); }
+      else state.expandedTopics.add(topic.id);
+    }
+    if (!collapse) refreshExpandedCards();
+    updateExpandButton();
   }
 
   async function toggleCard(topicId) {
     state.selectedTopicId = topicId;
+    const expand = !state.expandedTopics.has(topicId);
+    if (expand) state.expandedTopics.add(topicId); else state.expandedTopics.delete(topicId);
+    updateExpandButton();
+    return setCardExpanded(topicId, expand);
+  }
+
+  async function setCardExpanded(topicId, expand) {
+    if (expand && !state.expandedTopics.has(topicId)) return;
     const bodyEl = document.getElementById(`detail-body-${topicId}`);
     const btnSpan = document.getElementById(`expand-btn-${topicId}`);
     if (!bodyEl) return;
 
-    if (bodyEl.style.display === "block") {
+    if (!expand) {
       bodyEl.style.display = "none";
       if (btnSpan) btnSpan.innerText = "展开详情";
       return;
@@ -467,6 +571,12 @@
     if (btnSpan) btnSpan.innerText = "收起详情";
 
     const detail = await fetchTopicDetail(topicId);
+    if (!state.expandedTopics.has(topicId) || document.getElementById(`detail-body-${topicId}`) !== bodyEl) return;
+    const meta = state.topicsMeta.find(t => t.id === topicId);
+    if (detail.version != null && meta && detail.version !== meta.version) {
+      bodyEl.textContent = "议题已更新或文件与索引不一致，请点击刷新核对最新状态。";
+      return;
+    }
     let roundsHtml = "";
     (detail.rounds || []).forEach((r) => {
       roundsHtml += `
@@ -627,6 +737,8 @@
       rejection_reason: meta.rejection_reason || "",
       implementation_state: meta.implementation_state || "not_started",
       impl_commit: meta.impl_commit || "",
+      new_user_opinion: meta.latest_round_user_opinion ?? meta.last_user_opinion ?? "",
+      new_agent_reply: meta.latest_round_agent_reply ?? meta.last_agent_reply ?? "",
     };
   }
 
@@ -652,6 +764,11 @@
     }
     onOutcomeChanged();
     updateModalInfo(session);
+    if (session.mode === "amend") {
+      document.getElementById("modal-edit-title").textContent = `修改最近一轮（第 ${session.base.rounds_count} 轮）: ${session.base.title}`;
+      document.getElementById("form-user-opinion").placeholder = "修改本轮原话；修改前的内容保留在版本历史中";
+      document.getElementById("form-agent-reply").placeholder = "修改本轮答复；修改前的内容保留在版本历史中";
+    }
     updateEditControls(session);
   }
 
@@ -866,6 +983,23 @@
     if (!banner) return;
     const original = valuesFromMeta(session.base);
     const remote = valuesFromMeta(latest);
+    if (session.mode === "amend" && latest.rounds_count !== session.base.rounds_count) {
+      banner.append(makeTextElement("p", "已有新的讨论轮次，不能把旧轮次的修改覆盖到新的最近一轮。草稿已保留，可改为追加更正说明。"));
+      const append = makeTextElement("button", "保留草稿，改为追加新一轮");
+      append.className = "btn btn-secondary";
+      append.addEventListener("click", () => {
+        if (state.editSession !== session) return;
+        session.mode = "append";
+        session.base = { ...latest };
+        for (const field of EDIT_FIELDS) session.draft[field.key] = remote[field.key];
+        session.conflict = null; session.request = null; session.uncertain = false;
+        clearEditBanner(); writeEditForm(session);
+      });
+      banner.appendChild(append);
+      return;
+    }
+    const mergeFields = session.mode === "amend" ? [...EDIT_FIELDS,
+      { key: "new_user_opinion", label: "本轮用户原话" }, { key: "new_agent_reply", label: "本轮团队答复" }] : EDIT_FIELDS;
     const choices = new Map();
     banner.append(
       makeTextElement("strong", `核对版本 v${session.base.version} → v${latest.version}`),
@@ -888,7 +1022,7 @@
       if (control) row.lastElementChild.appendChild(control);
       table.appendChild(row);
     };
-    for (const field of EDIT_FIELDS) {
+    for (const field of mergeFields) {
       let choice = null;
       if (remote[field.key] !== original[field.key] && remote[field.key] !== session.draft[field.key]) {
         choice = document.createElement("select");
@@ -917,7 +1051,7 @@
     confirmButton.className = "btn btn-primary";
     confirmButton.addEventListener("click", () => {
       if (state.editSession !== session || session.conflict?.latest !== latest) return;
-      for (const field of EDIT_FIELDS) {
+      for (const field of mergeFields) {
         const choice = choices.get(field.key);
         if (choice) {
           if (choice.value === "server") session.draft[field.key] = remote[field.key];
@@ -936,7 +1070,11 @@
     banner.appendChild(confirmButton);
   }
 
-  function openEditModal(topicId) {
+  function openEditModal(topicId, mode = "append") {
+    if (mode === "amend" && !state.capabilities.edit_latest_round) {
+      showToast("服务端尚未支持修改本轮，请先更新服务。", "warning");
+      return;
+    }
     if (state.editSession?.saving) {
       showToast("正在确认当前议题的保存结果，暂不能切换议题。", "warning");
       return;
@@ -945,13 +1083,21 @@
     if (!meta) return;
     if (state.editSession) rememberDraft(state.editSession);
     let session = state.draftsByTopic.get(topicId);
+    if (session && session.mode !== mode) {
+      if (session.request || JSON.stringify(session.draft) !== session.initialDraft) {
+        showToast("该议题已有未提交草稿，先继续处理原草稿；不会用另一种编辑方式覆盖它。", "warning");
+      } else session = null;
+    }
+    if (mode === "amend" && !meta.rounds_count) return;
     if (!session) {
       const nextRound = (Number(meta.rounds_count) || 0) + 1;
       session = {
-        topicId, base: { ...meta }, saving: false, reviewing: false,
+        topicId, mode, base: { ...meta }, saving: false, reviewing: false,
         request: null, uncertain: false, conflict: null,
-        draft: { ...valuesFromMeta(meta), new_user_opinion: "", new_agent_reply: "",
-          commit_message: `第 ${nextRound} 轮决策：确认 [${meta.title}]` },
+        draft: { ...valuesFromMeta(meta),
+          new_user_opinion: mode === "amend" ? valuesFromMeta(meta).new_user_opinion : "",
+          new_agent_reply: mode === "amend" ? valuesFromMeta(meta).new_agent_reply : "",
+          commit_message: mode === "amend" ? `更正第 ${meta.rounds_count} 轮回复 [${meta.title}]` : `第 ${nextRound} 轮决策：确认 [${meta.title}]` },
       };
       session.initialDraft = JSON.stringify(session.draft);
       state.draftsByTopic.set(topicId, session);
@@ -979,7 +1125,7 @@
     const initial = valuesFromMeta(meta);
     const unchangedDecision = wf === initial.workflow_state && outcome === initial.decision_outcome;
     const decisionStatus = unchangedDecision && meta.decision_status ? meta.decision_status :
-      outcome === "rejected" ? "已否决" : outcome === "superseded" ? "已替代" :
+      outcome === "partially_accepted" ? "部分同意" : outcome === "rejected" ? "已否决" : outcome === "superseded" ? "已替代" :
         outcome === "deferred" ? "暂缓" : wf === "decided" ? "已定" : "待定";
     return {
       title: meta.title,
@@ -992,6 +1138,7 @@
       impl_verifier: meta.impl_verifier ?? "", superseded_by: meta.superseded_by ?? "",
       new_user_opinion: draft.new_user_opinion.trim(), new_agent_reply: draft.new_agent_reply.trim(),
       commit_message: draft.commit_message.trim(), expected_version: meta.version, request_id: requestId,
+      ...(session.mode === "amend" ? { edit_latest_round: true } : {}),
     };
   }
 
@@ -1014,6 +1161,10 @@
       }
       if (session.draft.decision_outcome === "rejected" && !session.draft.rejection_reason.trim()) {
         showToast("明确否决方案时，必须录入否决原因与重新讨论前提。", "warning");
+        return;
+      }
+      if (session.draft.decision_outcome === "partially_accepted" && session.base.decision_outcome !== "partially_accepted" && !session.draft.new_user_opinion.trim()) {
+        showToast("请在用户意见中说明同意哪些部分、哪些部分仍保留。", "warning");
         return;
       }
       if (!Number.isSafeInteger(session.base.version) || session.base.version < 1) {
@@ -1061,6 +1212,7 @@
           document.getElementById("modal-edit-decision").classList.remove("active");
         }
         const savedTopicId = session.topicId;
+        state.expandedTopics.add(savedTopicId);
         const priorRevId = result.prior_rev_id;
         const targetExpectedVersion = result.new_version;
         const undoAction = {
@@ -1093,6 +1245,7 @@
         }
         const refreshed = await loadMetadataList();
         if (!refreshed) showToast("保存已经成功，但列表刷新失败；请勿重复提交同一讨论。", "warning");
+        else await focusTopic(savedTopicId, { keepFilters: true });
         return;
       }
       const message = result.message || result.error || `HTTP ${response.status}`;
@@ -1258,11 +1411,11 @@
                     ⏪ 仅回滚当前议题
                   </button>
                 ` : `
-                  <button class="btn btn-secondary" style="font-size: 0.7rem; padding: 0.15rem 0.4rem; color: #f59e0b;" data-history-action="restore" data-topic-id="${escapeHtml(state.selectedTopicId)}" data-revision-id="${escapeHtml(r.rev_id)}">
+                  <button class="btn btn-secondary" style="font-size: 0.7rem; padding: 0.15rem 0.4rem; color: var(--color-discussing);" data-history-action="restore" data-topic-id="${escapeHtml(state.selectedTopicId)}" data-revision-id="${escapeHtml(r.rev_id)}">
                     ⏪ 撤销创建（未包含该议题）
                   </button>
                 `) : ""}
-                <button class="btn btn-secondary" style="font-size: 0.7rem; padding: 0.15rem 0.4rem; color: #ef4444;" data-history-action="rollback" data-revision-id="${escapeHtml(r.rev_id)}">
+                <button class="btn btn-secondary" style="font-size: 0.7rem; padding: 0.15rem 0.4rem; color: var(--color-pending);" data-history-action="rollback" data-revision-id="${escapeHtml(r.rev_id)}">
                   ⚠️ 全库快照重置
                 </button>
               </div>
@@ -1316,7 +1469,7 @@
       }
     } catch (e) {
       if (!append) {
-        container.innerHTML = `<div style="color: #ef4444; padding: 2rem;">加载失败: ${escapeHtml(e.message)}</div>`;
+        container.innerHTML = `<div style="color: var(--color-pending); padding: 2rem;">加载失败: ${escapeHtml(e.message)}</div>`;
       } else {
         showToast(`加载更多历史失败: ${e.message}`, "error");
       }
@@ -1476,12 +1629,17 @@
     document.getElementById(drawerId)?.classList.remove("active");
   }
 
-  async function focusTopic(topicId) {
+  async function focusTopic(topicId, { keepFilters = false } = {}) {
     if (!state.topicsMeta.some(topic => topic.id === topicId)) return;
     document.querySelector('.nav-item[data-view="topics"]').click();
-    resetFilters();
-    const detail = document.getElementById(`detail-body-${topicId}`);
-    if (detail?.style.display === "none") await toggleCard(topicId);
+    if (!keepFilters || !getFilteredTopics().some(topic => topic.id === topicId)) {
+      resetFilters();
+      if (keepFilters) showToast("议题已不符合原筛选条件，已清除筛选并定位到刚保存的议题。", "info");
+    }
+    state.selectedTopicId = topicId;
+    state.expandedTopics.add(topicId);
+    await setCardExpanded(topicId, true);
+    updateExpandButton();
     document.getElementById(`card-${topicId}`)?.scrollIntoView({ block: "start" });
   }
 
@@ -1509,6 +1667,29 @@
 
   // Initialization
   document.addEventListener("DOMContentLoaded", () => {
+    document.getElementById("btn-toggle-all").addEventListener("click", toggleAllCards);
+    document.getElementById("btn-refresh-topics").addEventListener("click", async () => {
+      if (!await loadMetadataList()) { showToast("刷新失败，请检查本机服务。", "error"); return; }
+      try {
+        const status = await fetch("/api/status", { cache: "no-store" }).then(r => r.json());
+        if (status.consistency && !status.consistency.consistent) showToast("检测到 Markdown 与索引不同步。已保留草稿，请先核对文件改动并同步索引；列表尚不能作为最新文件状态。", "warning");
+        else showToast("已刷新最新状态。");
+      } catch (_) { showToast("列表已刷新，但数据一致性尚未确认。", "warning"); }
+    });
+    document.addEventListener("click", (event) => {
+      const link = event.target.closest?.("a[href]");
+      if (!link || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button !== 0) return;
+      try {
+        const url = new URL(link.href, location.href);
+        if (url.origin !== location.origin || ![location.pathname, "/dashboard.html", "/decision-board.html", "/"].includes(url.pathname)) return;
+        const id = decodeURIComponent(url.hash.slice(1));
+        if (!state.topicsMeta.some(t => t.id === id)) return;
+        event.preventDefault();
+        history.pushState(null, "", url.hash);
+        focusTopic(id);
+      } catch (_) { /* Invalid links are inert in the renderer. */ }
+    });
+    window.addEventListener("focus", () => { if (!state.editSession?.saving && !state.creating) loadMetadataList(); });
     for (const id of ["settled-container", "open-container"]) {
       document.getElementById(id).addEventListener("click", (event) => {
         const button = event.target.closest("[data-overview-topic]");
@@ -1538,11 +1719,15 @@
       renderTopicCards();
     });
 
-    // Theme toggle
+    // Appearance is a browser preference, independent of ledger data and drafts.
     document.getElementById("btn-toggle-theme")?.addEventListener("click", () => {
-      const current = document.body.getAttribute("data-theme") || "dark";
-      const next = current === "dark" ? "light" : "dark";
-      document.body.setAttribute("data-theme", next);
+      appearance.mode = appearance.mode === "dark" ? "light" : "dark";
+      applyAppearance(true);
+    });
+    document.getElementById("theme-accent")?.addEventListener("change", (event) => {
+      if (!accentNames.includes(event.target.value)) return;
+      appearance.accent = event.target.value;
+      applyAppearance(true);
     });
 
     // Navigation items
@@ -1577,6 +1762,7 @@
       if (!topic) return;
       if (action === "toggle") toggleCard(topic.id);
       if (action === "edit") openEditModal(topic.id);
+      if (action === "amend") openEditModal(topic.id, "amend");
       if (action === "copy") copyCitation(topic.title, topic.id);
     });
     document.getElementById("drawer-history-list")?.addEventListener("click", (event) => {

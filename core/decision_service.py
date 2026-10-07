@@ -148,6 +148,11 @@ class DecisionService:
         topic_id = self.validate_topic_id(topic_id)
         if not isinstance(data, dict):
             raise TopicValidationError("议题数据必须为对象")
+        amend_latest = data.get("edit_latest_round", False)
+        if type(amend_latest) is not bool:
+            raise TopicValidationError("edit_latest_round 必须为布尔值")
+        if amend_latest and (expected_version is None or not any(k in data for k in ("new_user_opinion", "new_agent_reply"))):
+            raise TopicValidationError("修改最近一轮必须提供 expected_version 和要修改的回复字段")
         for field in ("title", "section", "object", "function", "priority", "workflow_state", "lifecycle_status",
                       "decision_status", "decision_outcome", "implementation_state", "impl_status", "impl_commit",
                       "impl_verifier", "rejection_reason", "superseded_by", "new_user_opinion", "user_opinion",
@@ -315,8 +320,10 @@ class DecisionService:
             raise TopicValidationError("议题标题不能为空")
         if wf_state not in ("discussing", "pending", "decided"):
             raise TopicValidationError("无效的 workflow_state")
-        if outcome not in ("", "accepted", "rejected", "deferred", "superseded"):
+        if outcome not in ("", "accepted", "partially_accepted", "rejected", "deferred", "superseded"):
             raise TopicValidationError("无效的 decision_outcome")
+        if outcome == "partially_accepted" and prior.get("decision_outcome") != outcome and not user_opinion:
+            raise TopicValidationError("部分同意时，请在用户意见中说明已同意和仍保留的部分")
         if impl_state not in ("not_started", "in_progress", "implemented", "verified"):
             raise TopicValidationError("无效的 implementation_state")
 
@@ -352,7 +359,7 @@ class DecisionService:
             func = data.get("function", "核心规范")
             priority = data.get("priority", "普通")
 
-        status_default = {"rejected": "已否决", "deferred": "暂缓", "superseded": "已替代"}.get(outcome, "已定" if wf_state == "decided" else "待定")
+        status_default = {"partially_accepted": "部分同意", "rejected": "已否决", "deferred": "暂缓", "superseded": "已替代"}.get(outcome, "已定" if wf_state == "decided" else "待定")
         if wf_state == prior.get("workflow_state") and outcome == prior.get("decision_outcome"):
             status_default = prior.get("decision_status", status_default)
         dec_status = data.get("decision_status", status_default)
@@ -362,6 +369,19 @@ class DecisionService:
         # 4. 读取既有 Markdown 与历史轮次，并在修改前冻结真实前态基线 (F01, F10, G01, G02)
         existing_doc = self.parser.parse_markdown_file(md_file)
         current_rounds = existing_doc["rounds"] if existing_doc else []
+        if amend_latest and not current_rounds:
+            raise TopicValidationError("当前没有可修改的已提交轮次，请先追加讨论")
+        if amend_latest and existing_row and not cached_prep:
+            disk_digest = self.recovery._compute_digest(existing_doc, existing_doc["core_content"], current_rounds)
+            db_digest = self.recovery._compute_digest(existing_row, existing_row.get("content", ""),
+                                                      self._reconstruct_rounds_from_topic(existing_row))
+            if disk_digest != db_digest:
+                raise VersionConflictError(current_version=existing_doc["version"], expected_version=expected_version, topic_id=topic_id)
+        render_rounds = current_rounds
+        if amend_latest:
+            replacements = {field: data[key] for key, field in
+                            (("new_user_opinion", "user"), ("new_agent_reply", "agent")) if key in data}
+            render_rounds = current_rounds[:-1] + [self.parser.amend_round(current_rounds[-1], replacements)]
 
         # 幂等重试防护：只有确认属于同一请求的中断重试，且磁盘文件已包含上一轮讨论时，才去重该轮次 (F01, F02, U09)
         is_duplicate_round = False
@@ -376,11 +396,10 @@ class DecisionService:
                (not commit_msg or commit_msg == last_c):
                 is_duplicate_round = True
 
-        new_round_num = len(current_rounds) + (0 if is_duplicate_round else 1)
         core_content = content_override if content_override is not None else (existing_doc["core_content"] if existing_doc else "")
 
         new_round_info = None
-        if (user_opinion or agent_reply or commit_msg) and not is_duplicate_round:
+        if (user_opinion or agent_reply or commit_msg) and not is_duplicate_round and not amend_latest:
             new_round_info = {
                 "commit_message": commit_msg,
                 "user_opinion": user_opinion,
@@ -398,7 +417,7 @@ class DecisionService:
             obj=obj,
             func=func,
             core_content=core_content,
-            existing_rounds=current_rounds,
+            existing_rounds=render_rounds,
             new_round=new_round_info,
             workflow_state=wf_state,
             decision_outcome=outcome,
@@ -413,7 +432,8 @@ class DecisionService:
         )
         # Reject ambiguous Markdown before persistence instead of silently moving
         # user words into another field or swallowing history with an open fence.
-        expected_rounds = current_rounds + ([new_round_info] if new_round_info else [])
+        expected_rounds = render_rounds + ([new_round_info] if new_round_info else [])
+        new_round_num = len(expected_rounds)
         self._validate_document(md_text, topic_id, core_content, expected_rounds)
         if not cached_prep:
             # 外部 Markdown 改动检测：若在本次保存前磁盘轮次已被直接编辑，先将该真实前态导入为独立基线 (F10, G02)
@@ -426,6 +446,7 @@ class DecisionService:
                     if c_msg: disk_disc.append({"key": f"第 {rnd} 轮变更说明", "val": c_msg})
                     if u_op: disk_disc.append({"key": f"第 {rnd} 轮用户意见", "val": u_op})
                     if a_rep: disk_disc.append({"key": f"第 {rnd} 轮落实答复", "val": a_rep})
+                    if not (c_msg or u_op or a_rep): disk_disc.append({"key": f"第 {rnd} 轮变更说明", "val": ""})
 
                 db_disc_raw = existing_row.get("discussion_json") or "[]"
                 try:
@@ -488,8 +509,8 @@ class DecisionService:
         # 6. 更新 SQLite 数据库结构化索引
         # 优先基于权威 Markdown 既有轮次构建，确保手工直接修改的讨论内容不被陈旧的数据库字段覆盖 (F05, U11)
         discussion = []
-        if existing_doc and existing_doc.get("rounds"):
-            for rnd, r in enumerate(existing_doc["rounds"], 1):
+        if expected_rounds:
+            for rnd, r in enumerate(expected_rounds, 1):
                 c_msg = (r.get("commit_message") or "").strip()
                 u_op = (r.get("user_opinion") or "").strip()
                 a_rep = (r.get("agent_reply") or "").strip()
@@ -499,20 +520,11 @@ class DecisionService:
                     discussion.append({"key": f"第 {rnd} 轮用户意见", "val": u_op})
                 if a_rep:
                     discussion.append({"key": f"第 {rnd} 轮落实答复", "val": a_rep})
+                if not (c_msg or u_op or a_rep):
+                    discussion.append({"key": f"第 {rnd} 轮变更说明", "val": ""})
         elif existing_row and existing_row.get("discussion_json"):
             discussion = json.loads(existing_row["discussion_json"])
         
-        has_commit = any(d.get("key") == f"第 {new_round_num} 轮变更说明" for d in discussion)
-        has_opinion = any(d.get("key") == f"第 {new_round_num} 轮用户意见" for d in discussion)
-        has_reply = any(d.get("key") == f"第 {new_round_num} 轮落实答复" for d in discussion)
-
-        if commit_msg and not has_commit:
-            discussion.append({"key": f"第 {new_round_num} 轮变更说明", "val": commit_msg})
-        if user_opinion and not has_opinion:
-            discussion.append({"key": f"第 {new_round_num} 轮用户意见", "val": user_opinion})
-        if agent_reply and not has_reply:
-            discussion.append({"key": f"第 {new_round_num} 轮落实答复", "val": agent_reply})
-
         if not db_already_updated:
             try:
                 new_version = self.db.upsert_topic({

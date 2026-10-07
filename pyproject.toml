@@ -37,5 +37,4 @@ packages = ["core", "core.web"]
 "core.web" = "web"
 
 [tool.setuptools.package-data]
-"core.web" = ["*"]
-
+"core.web" = ["*", "vendor/*"]
