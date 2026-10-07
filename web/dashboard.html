@@ -226,20 +226,21 @@
           <div class="review-sidebar-section review-context-section">
             <div class="review-label">上一轮 Agent 回复（只读）</div>
             <div class="review-readonly" id="review-agent-reply">暂无 Agent 回复</div>
+            <div class="review-agent-question" id="review-agent-question" hidden></div>
           </div>
           <div class="review-sidebar-section review-context-section">
             <label class="review-label" for="review-user-opinion-input">本轮用户意见</label>
             <textarea class="form-textarea review-user-opinion-input" id="review-user-opinion-input" rows="4" placeholder="补充或修正本轮用户意见原话"></textarea>
           </div>
           <div class="review-sidebar-actions">
-            <button class="btn btn-secondary review-overview-action" id="btn-review-overview" type="button" aria-expanded="false" title="打开议题总览">
+            <button class="btn btn-secondary review-overview-action" id="btn-review-overview" type="button" aria-expanded="false" aria-controls="review-overview-panel" title="打开议题总览">
               <span class="review-action-icon" aria-hidden="true">▦</span>
               <span class="review-action-caption">议题总览</span>
             </button>
             <div class="review-submit-group">
               <button class="btn btn-secondary review-nav-arrow" id="btn-review-previous" type="button" title="上一个议题" aria-label="上一个议题">←</button>
-              <button class="btn btn-secondary review-nav-arrow" id="btn-review-next" type="button" title="下一个议题" aria-label="下一个议题">→</button>
               <button class="btn btn-primary review-submit-button" id="btn-review-submit" type="button">提交</button>
+              <button class="btn btn-secondary review-nav-arrow" id="btn-review-next" type="button" title="下一个议题" aria-label="下一个议题">→</button>
             </div>
           </div>
         </aside>
@@ -424,6 +425,7 @@
   <script src="default_data.js"></script>
   <script src="markdown.js"></script>
   <script src="diagrams.js"></script>
+  <script src="agent-question.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

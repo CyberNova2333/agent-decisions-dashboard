@@ -60,6 +60,31 @@ Path("receipt.json").write_text(json.dumps(receipt, ensure_ascii=False), encodin
 
 创建使用 `POST /api/topic/create`，传 `id`、`title`、可选 `content_override` 及状态。已有议题省略的字段保留原值；空字符串表示明确清空支持清空的字段。核验使用 `POST /api/topic/:id/verify`，传 `expected_version`、`request_id`、`impl_commit`、`verifier`、`test_summary` 和布尔 `mark_verified`；这只登记调用者提供的证据，服务不替你运行测试。
 
+### 向用户提供可选答案
+
+需要用户选择时，将问题放进 `new_agent_reply` 中的 `agent-question` JSON 代码围栏，仍通过上述保存 API 追加讨论。不要写入虚构的 `new_user_opinion` 或把推荐答案登记为已同意。示例：
+
+```python
+question = {
+    "question": "这轮先实现哪种保存方式？",
+    "options": [
+        {"label": "先保存到本地", "description": "先完成本机使用流程"},
+        {"label": "先讨论同步需求", "description": "明确范围后再实施"},
+    ],
+}
+request_data = {
+    "expected_version": topic["version"],
+    "request_id": str(uuid.uuid4()),
+    "new_agent_reply": "请确认本轮范围。\n\n```agent-question\n"
+        + json.dumps(question, ensure_ascii=False, indent=2) + "\n```",
+    "commit_message": "补充保存范围问题与选项",
+}
+```
+
+每条最新答复只提供一个问题、2–8 个不同选项，选项可以是字符串或含 `label` 与可选 `description` 的对象。在阅卷侧栏显示单选控件，无默认选择，也不要求必须选一项；用户可只输入文字，或选择后继续补充。用户提交时，问题、答案和补充文字保存到原有用户意见字段；没有新的数据库字段或专用写入接口。
+
+不要把协议示例放进真实最新答复当作待回答的问题；讲解格式时用更长的外层代码围栏包住示例。无效或有歧义的协议按原文显示。其他历史轮次保留原始围栏用于追溯。选中答案不自动修改三组状态，Agent 后续应读取真实提交的用户意见，理解补充文字中的范围与条件后再推进。
+
 ## 3. 核对写入结果
 
 ```sh

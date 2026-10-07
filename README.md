@@ -22,6 +22,7 @@ Python 服务仅使用标准库，界面是静态 HTML/CSS/JavaScript；Mermaid 
 | 修改本轮 | 修改最近一轮已提交回复，保留修改前的版本；不增加讨论轮数，更早轮次只读 |
 | 查找与展开 | 按工作流、结论、实现状态和业务对象筛选；搜索 ID、标题、摘要、否决原因和最近有内容的答复；展开／收起当前筛选下的全部议题 |
 | 阅卷视图 | 在保留顶部 banner 与左侧筛选栏的主工作区内逐题处理议题；左上显示大号序号／总数，中央只滚动“展开详情”后的核心论述与历史，右侧栏显示上一轮 Agent 回复（只读）、可修改的本轮用户意见，以及进展、结论和实现状态小按钮；议题总览、上一个、下一个、提交位于右侧栏底部，提交用户意见修改时沿用版本与幂等检查 |
+| Agent 提供选项 | 最新一轮 Agent 回复可附带问题和单选答案；在阅卷侧栏选择后，仍可在“本轮用户意见”中补充多行文字，一次提交保存两者；也可只写文字 |
 | 保存后定位 | 刷新状态和详情缓存，保持刚保存的议题展开并定位；若不再符合原筛选条件，会提示并清除筛选以显示目标 |
 | Markdown 与图表 | 表格、多行文本、标题、列表、引用、代码围栏、安全链接和本地 Mermaid 渲染 |
 | 历史与恢复 | 查看快照、恢复单议题、撤销创建或恢复全库快照；台账保存与 Git 提交分别反馈 |
@@ -81,6 +82,28 @@ python -m core.server --config "D:/MyProject/dashboard.config.json" --no-browser
 5. 核对保存反馈。Git 关闭或提交失败不等于台账未保存；不要因此重复追加同一段讨论。
 
 页面编辑器不提供已有议题标题、正文与分类的修改入口；这些字段可通过保存 API 修改，也可在备份后编辑权威 Markdown 并核对、重建索引。
+
+### 回答 Agent 提供的选项
+
+Agent 在最新一轮答复中使用 `agent-question` 代码围栏提供一个问题。进入“阅卷视图”后，右侧显示问题和选项；初始不替用户选择，点击已选项可取消。在下方“本轮用户意见”中继续补充说明，点击“提交”后将问题、所选答案和补充文字一并保存为用户意见。可以不选任何选项，只填写自己的回答。
+
+````markdown
+建议先明确保存范围。
+
+```agent-question
+{
+  "question": "这轮先实现哪种保存方式？",
+  "options": [
+    {"label": "先保存到本地", "description": "先完成本机使用流程"},
+    {"label": "先讨论同步需求", "description": "明确范围后再实施"}
+  ]
+}
+```
+````
+
+每条最新 Agent 回复支持一个问题、2–8 个不同的选项。`options` 中也可直接写字符串；`description` 可省略。无效格式保留为原文，不生成交互控件。旧轮次及普通详情仍保留完整原始答复。选项草稿与文字草稿一样只保存在当前标签页，切换议题保留，重载页面前需先保存。
+
+选择答案不会自动改变议题进展、决策结论或实现状态；这些字段仍需单独核对。提交后重新进入该题，可继续修改选择和补充文字，旧版本保留在历史中。Agent 的写入示例见 [Agent 操作指南](./docs/agent-workflow.md#向用户提供可选答案)。
 
 ## 工作流、决策结论与实现状态
 
@@ -362,14 +385,14 @@ impl_verifier: ""
 
 ```sh
 python -m unittest discover tests
-node --test tests/markdown.test.js
+node --test tests/*.test.js
 node --check web/app.js
 node --check web/markdown.js
 node --check web/diagrams.js
 git diff --check
 ```
 
-Python 回归覆盖保存、恢复、幂等性、并发版本检查、索引一致性、Git 暂存区保护、HTTP 边界与 Agent 钩子。[使用回归](./tests/test_usability_regressions.py) 覆盖部分同意、多行回复、最近一轮更正、历史保留和回执轮次；[状态回归](./tests/test_progress_states.py) 覆盖进展与同意独立、旧记录保存／重试／恢复及 Agent 分类；[Markdown 测试](./tests/markdown.test.js) 检查换行、表格、链接和转义。符号链接测试在主机不允许创建链接时跳过。
+Python 回归覆盖保存、恢复、幂等性、并发版本检查、索引一致性、Git 暂存区保护、HTTP 边界与 Agent 钩子。[使用回归](./tests/test_usability_regressions.py) 覆盖部分同意、多行回复、最近一轮更正、历史保留和回执轮次；[状态回归](./tests/test_progress_states.py) 覆盖进展与同意独立、旧记录保存／重试／恢复及 Agent 分类；[Markdown 测试](./tests/markdown.test.js) 检查换行、表格、链接和转义；[Agent 选项测试](./tests/agent-question.test.js) 检查围栏协议、草稿恢复、切换答案、多行补充和 XSS 数据。符号链接测试在主机不允许创建链接时跳过。
 
 交互变更还需用独立台账进行浏览器检查：新建、部分同意、修改本轮及冲突、表格与 Mermaid、筛选、批量展开、保存后定位和主题切换。单元测试不代替这些检查，也不代表跨平台或断电恢复均已验证。
 
