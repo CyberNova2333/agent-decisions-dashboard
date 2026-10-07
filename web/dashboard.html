@@ -232,10 +232,15 @@
             <textarea class="form-textarea review-user-opinion-input" id="review-user-opinion-input" rows="4" placeholder="补充或修正本轮用户意见原话"></textarea>
           </div>
           <div class="review-sidebar-actions">
-            <button class="btn btn-secondary" id="btn-review-overview" type="button" aria-expanded="false">议题总览</button>
-            <button class="btn btn-secondary" id="btn-review-previous" type="button">← 上一个</button>
-            <button class="btn btn-secondary" id="btn-review-next" type="button">下一个 →</button>
-            <button class="btn btn-primary" id="btn-review-submit" type="button">提交当前议题</button>
+            <button class="btn btn-secondary review-overview-action" id="btn-review-overview" type="button" aria-expanded="false" title="打开议题总览">
+              <span class="review-action-icon" aria-hidden="true">▦</span>
+              <span class="review-action-caption">议题总览</span>
+            </button>
+            <div class="review-submit-group">
+              <button class="btn btn-secondary review-nav-arrow" id="btn-review-previous" type="button" title="上一个议题" aria-label="上一个议题">←</button>
+              <button class="btn btn-secondary review-nav-arrow" id="btn-review-next" type="button" title="下一个议题" aria-label="下一个议题">→</button>
+              <button class="btn btn-primary review-submit-button" id="btn-review-submit" type="button">提交</button>
+            </div>
           </div>
         </aside>
       </div>
