@@ -7,7 +7,7 @@
   <link rel="icon" id="page-favicon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚖️</text></svg>">
   <link rel="stylesheet" href="style.css">
 </head>
-<body data-theme="dark">
+<body data-theme="light" data-accent="pink">
   <!-- Top Global Navigation -->
   <header class="app-header">
     <div class="brand">
@@ -36,7 +36,17 @@
         <span>时间机器</span>
       </button>
 
-      <button class="btn-icon" id="btn-toggle-theme" title="切换深色/浅色主题">
+      <label class="theme-picker" for="theme-accent">
+        主题色
+        <select id="theme-accent">
+          <option value="pink">樱粉</option>
+          <option value="blue">蓝色</option>
+          <option value="violet">紫色</option>
+          <option value="teal">青绿</option>
+          <option value="amber">琥珀</option>
+        </select>
+      </label>
+      <button class="btn-icon" id="btn-toggle-theme" title="切换为浅色模式" aria-label="切换为浅色模式">
         🌓
       </button>
     </div>
@@ -105,10 +115,11 @@
             <span>🟢 已采纳</span>
           </span>
           <span class="filter-pill" data-type="outcome" data-val="deferred"><span>⏳ 推迟再议</span></span>
+          <span class="filter-pill" data-type="outcome" data-val="partially_accepted"><span>◐ 部分同意</span></span>
           <span class="filter-pill" data-type="outcome" data-val="superseded"><span>📦 已被替代</span></span>
           <span class="filter-pill" data-type="outcome" data-val="rejected" style="border-left: 3px solid #ef4444;">
             <span>❌ 明确否决方案</span>
-            <span class="nav-badge" id="pill-count-rejected" style="background: rgba(239,68,68,0.2); color: #ef4444;">0</span>
+            <span class="nav-badge" id="pill-count-rejected" style="background: var(--color-pending-light); color: var(--color-pending);">0</span>
           </span>
         </div>
       </div>
@@ -142,6 +153,8 @@
 
         <div style="display: flex; align-items: center; gap: 0.8rem;">
           <span style="font-size: 0.82rem; color: var(--text-dim);" id="filtered-count-label">共 0 项议题</span>
+          <button class="btn btn-secondary" id="btn-toggle-all">展开全部</button>
+          <button class="btn btn-secondary" id="btn-refresh-topics">刷新</button>
           <div style="display: flex; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); overflow: hidden;">
             <button class="btn btn-secondary" id="btn-view-grid" style="border: none; border-radius: 0;" title="网格卡片">⊞</button>
             <button class="btn btn-secondary" id="btn-view-list" style="border: none; border-radius: 0;" title="紧凑列表">☰</button>
@@ -240,6 +253,7 @@
             <select class="form-select" id="form-decision-outcome" onchange="window.dashboardApp.onOutcomeChanged()">
               <option value="">尚无结论</option>
               <option value="accepted">🟢 采纳接受 (Accepted)</option>
+              <option value="partially_accepted">◐ 部分同意（在原话中说明范围）</option>
               <option value="rejected">❌ 明确否决方案 (Rejected)</option>
               <option value="deferred">⏳ 推迟再议 (Deferred)</option>
               <option value="superseded">📦 已被新方案替代 (Superseded)</option>
@@ -249,7 +263,7 @@
 
         <!-- 否决原因（仅在 outcome === rejected 时突出显示） -->
         <div class="form-group" id="group-rejection-reason" style="display: none;">
-          <label class="form-label" style="color: #ef4444; font-weight: 700;">❌ 否决原因与重新讨论前提（约束 Agent 不得重提）：</label>
+          <label class="form-label" style="color: var(--color-pending); font-weight: 700;">❌ 否决原因与重新讨论前提（约束 Agent 不得重提）：</label>
           <textarea class="form-textarea" id="form-rejection-reason" rows="2" placeholder="记录为何否决该方案、在何种客观条件变化下方可重提..."></textarea>
         </div>
 
@@ -329,6 +343,8 @@
 
   <!-- Scripts -->
   <script src="default_data.js"></script>
+  <script src="markdown.js"></script>
+  <script src="diagrams.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

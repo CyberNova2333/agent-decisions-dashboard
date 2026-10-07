@@ -73,6 +73,38 @@ class SecurityBoundaryTests(unittest.TestCase):
                 self.assertEqual(status, 428)
         self.assertEqual(self.state(), before)
 
+    def test_early_rejections_return_readable_responses_without_writes(self):
+        before = self.state()
+        cases = [({"Host": f"attacker.invalid:{self.httpd.server_port}"}, 403),
+                 ({"Origin": "http://127.0.0.1:1"}, 403),
+                 ({"Content-Type": "text/plain"}, 415)]
+        for _ in range(20):
+            for headers, expected in cases:
+                status, _ = self.request('/api/topic/a/save', {"title": "Rejected", "expected_version": 1}, headers)
+                self.assertEqual(status, expected)
+        self.assertEqual(self.state(), before)
+
+    def test_rejection_does_not_wait_for_missing_body(self):
+        before = self.state()
+        with socket.create_connection(self.httpd.server_address, timeout=2) as client:
+            client.sendall((f"POST /api/topic/a/save HTTP/1.1\r\nHost: 127.0.0.1:{self.httpd.server_port}\r\n"
+                            "Origin: http://untrusted.invalid\r\nContent-Length: 100\r\n\r\n").encode())
+            response = http.client.HTTPResponse(client)
+            response.begin()
+            self.assertEqual(response.status, 403)
+            response.read()
+            # The single-thread server must accept another connection even while
+            # the rejected client holds its write side open without sending data.
+            conn = http.client.HTTPConnection(*self.httpd.server_address, timeout=1)
+            try:
+                conn.request('GET', '/api/topics')
+                healthy = conn.getresponse()
+                self.assertEqual(healthy.status, 200)
+                healthy.read()
+            finally:
+                conn.close()
+        self.assertEqual(self.state(), before)
+
     def test_verify_http_honors_stale_version(self):
         self.svc.save_topic("a", {"title": "Winner"}, expected_version=1)
         before = self.state()

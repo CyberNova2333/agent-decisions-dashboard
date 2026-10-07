@@ -174,6 +174,8 @@ class AgentContextEngine:
         else:
             for item in context_data["pending_requirements"]:
                 md.append(f"- **[{item['id']}] {item['title']}** (当前: `{item['workflow_state']}` / `{item['implementation_state']}`)")
+                if item["decision_outcome"] == "partially_accepted":
+                    md.append("**部分同意**：仅原话明确同意的范围有效，其余内容仍待确认；不能把整项提案视为已采纳。")
                 if item not in context_data["active_decisions"]:
                     md.append(item.get("content", ""))
                     for entry in item.get("discussion", []):

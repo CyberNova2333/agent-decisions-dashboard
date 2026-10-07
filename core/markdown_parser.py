@@ -388,7 +388,51 @@ class TopicMarkdownParser:
         }
 
     @staticmethod
-    def _build_round_dict(title: str, lines: List[str]) -> Dict[str, Any]:
+    def _round_field_header(line):
+        match = re.match(r"^-\s+\*\*(.*?)\*\*[：:]?[ \t]*(.*)", line)
+        if not match:
+            return None
+        patterns = {
+            "user": r"^(?:💡\s*)?(?:用户(?:意见)?|user\s*opinion)(?:\s*[（(]\s*(?:最新原话|latest\s*(?:verbatim|opinion|requirements?))\s*[）)])?$",
+            "agent": r"^(?:🤖\s*)?(?:团队答复|团队回复|落实说明|答复|落实|(?:team|agent)\s*reply)(?:\s*[（(]\s*(?:落实说明|implementation\s*(?:details|notes?)|schedule)\s*[）)])?$",
+            "commit": r"^(?:变更说明|change\s*summary)(?:\s*[（(]\s*(?:简要|变更说明|summary)\s*[）)])?$",
+        }
+        for field, pattern in patterns.items():
+            if re.match(pattern, match.group(1).strip(), re.IGNORECASE):
+                return field, match.group(2).strip()
+        return None
+
+    @classmethod
+    def amend_round(cls, original, replacements):
+        """Replace selected reply fields; preserve title, other fields and preamble."""
+        lines = original["content"].splitlines()
+        starts = []
+        fence = None
+        for index, line in enumerate(lines):
+            if fence:
+                if is_fence_close(line, *fence): fence = None
+                continue
+            fence = is_fence_start(line)
+            if fence: continue
+            header = cls._round_field_header(line)
+            if header: starts.append((index, header[0]))
+        output = lines[:starts[0][0]] if starts else list(lines)
+        seen = set()
+        labels = {"user": "💡 用户意见（最新原话）", "agent": "🤖 团队答复（落实说明）"}
+        for pos, (start, field) in enumerate(starts):
+            end = starts[pos + 1][0] if pos + 1 < len(starts) else len(lines)
+            if field not in replacements:
+                output.extend(lines[start:end])
+            elif field not in seen:
+                output.extend([f"- **{labels[field]}**：", "", replacements[field].strip(), ""])
+            seen.add(field)
+        for field, value in replacements.items():
+            if field not in seen:
+                output.extend([f"- **{labels[field]}**：", "", value.strip(), ""])
+        return cls._build_round_dict(original["title"], output)
+
+    @classmethod
+    def _build_round_dict(cls, title: str, lines: List[str]) -> Dict[str, Any]:
         """提炼轮次内容并分离用户原话与答复，具备完备代码围栏感知"""
         body = "\n".join(lines).strip()
         user_lines: List[str] = []
@@ -425,42 +469,12 @@ class TopicMarkdownParser:
 
             # 围栏之外检测字段标头
             # 必须精准匹配协议支持的完整字段标头，严禁将包含标头单词的普通列表项（如 - **Team reply SLA**: 或 - **User opinion survey**:）误判为协议字段 (R1, N01, N03)
-            bullet_m = re.match(r"^-\s+\*\*(.*?)\*\*[：:]?[ \t]*(.*)", line)
-            if bullet_m:
-                label_text = bullet_m.group(1).strip()
-                rest_text = bullet_m.group(2).strip()
-
-                user_label_m = re.match(
-                    r"^(?:💡\s*)?(?:用户(?:意见)?|user\s*opinion)(?:\s*[（(]\s*(?:最新原话|latest\s*(?:verbatim|opinion|requirements?))\s*[）)])?$",
-                    label_text,
-                    re.IGNORECASE
-                )
-                agent_label_m = re.match(
-                    r"^(?:🤖\s*)?(?:团队答复|团队回复|落实说明|答复|落实|(?:team|agent)\s*reply)(?:\s*[（(]\s*(?:落实说明|implementation\s*(?:details|notes?)|schedule)\s*[）)])?$",
-                    label_text,
-                    re.IGNORECASE
-                )
-                commit_label_m = re.match(
-                    r"^(?:变更说明|change\s*summary)(?:\s*[（(]\s*(?:简要|变更说明|summary)\s*[）)])?$",
-                    label_text,
-                    re.IGNORECASE
-                )
-
-                if user_label_m:
-                    current_target = "user"
-                    if rest_text:
-                        user_lines.append(rest_text)
-                    continue
-                elif agent_label_m:
-                    current_target = "agent"
-                    if rest_text:
-                        agent_lines.append(rest_text)
-                    continue
-                elif commit_label_m:
-                    current_target = "commit"
-                    if rest_text:
-                        commit_lines.append(rest_text)
-                    continue
+            header = cls._round_field_header(line)
+            if header:
+                current_target, rest_text = header
+                if rest_text:
+                    {"user": user_lines, "agent": agent_lines, "commit": commit_lines}[current_target].append(rest_text)
+                continue
 
             if current_target == "user":
                 user_lines.append(line)

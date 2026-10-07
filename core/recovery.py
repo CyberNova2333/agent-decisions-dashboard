@@ -274,6 +274,8 @@ class RecoveryManager:
                         discussion.append({"key": f"{title} 用户意见", "val": u})
                     if a:
                         discussion.append({"key": f"{title} 落实答复", "val": a})
+                    if not (c or u or a):
+                        discussion.append({"key": f"{title} 变更说明", "val": ""})
 
                 topic_data = {
                     "id": topic_id,

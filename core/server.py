@@ -17,6 +17,7 @@ import re
 import socket
 import hashlib
 import sqlite3
+import time
 from pathlib import Path
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from typing import Dict, Any, Optional
@@ -109,15 +110,15 @@ class DashboardServer:
             topic_id = r["id"]
 
             discussion = json.loads(r["discussion_json"]) if r.get("discussion_json") else []
-            rounds_count = len(self.service._reconstruct_rounds_from_topic(dict(r, discussion=discussion)))
-            user_op = ""
-            agent_rep = ""
-            for d in discussion:
-                k = d.get("key", "")
-                if "用户" in k:
-                    user_op = d.get("val", "")
-                elif "答复" in k or "落实" in k:
-                    agent_rep = d.get("val", "")
+            rounds = self.service._reconstruct_rounds_from_topic(dict(r, discussion=discussion))
+            rounds_count = len(rounds)
+            latest = rounds[-1] if rounds else {}
+            user_op = latest.get("user_opinion", "")
+            agent_rep = latest.get("agent_reply", "")
+            last_user, last_agent = "", ""
+            for entry in discussion:
+                if "用户" in entry.get("key", ""): last_user = entry.get("val", "")
+                elif "答复" in entry.get("key", "") or "落实" in entry.get("key", ""): last_agent = entry.get("val", "")
 
             topics_list.append({
                 "id": topic_id,
@@ -141,8 +142,10 @@ class DashboardServer:
                 "summary": (r["content"] or "").split("\n\n")[0].replace("\n", " ")[:140],
                 "sources": r.get("sources", ""),
                 "rounds_count": rounds_count,
-                "last_user_opinion": user_op if user_op != "—" else "",
-                "last_agent_reply": agent_rep if agent_rep != "—" else "",
+                "last_user_opinion": last_user if last_user != "—" else "",
+                "last_agent_reply": last_agent if last_agent != "—" else "",
+                "latest_round_user_opinion": user_op,
+                "latest_round_agent_reply": agent_rep,
                 "updated_at": r["updated_at"]
             })
         return topics_list
@@ -154,8 +157,8 @@ class DashboardServer:
         for topic in topics:
             wf = topic["workflow_state"]
             outcome = topic["decision_outcome"]
-            if wf == "decided" and outcome in ("", "accepted", "rejected"):
-                label = "已否决" if outcome == "rejected" else "已决策"
+            if wf == "decided" and outcome in ("", "accepted", "partially_accepted", "rejected"):
+                label = "部分同意" if outcome == "partially_accepted" else "已否决" if outcome == "rejected" else "已决策"
                 settled.append({"title": topic["title"], "requirement": topic["summary"],
                                 "details": topic["rejection_reason"] if outcome == "rejected" else topic["decision_status"],
                                 "topic_ref": topic["id"], "outcome_label": label})
@@ -173,6 +176,41 @@ def make_handler(server: DashboardServer):
         def setup(self):
             super().setup()
             self.connection.settimeout(REQUEST_TIMEOUT)
+            self._body_read = False
+
+        def _drain_rejected_body(self):
+            # Closing with unread input can reset the socket on Windows and hide
+            # the error response. Send it first, then discard only a small body,
+            # within a fixed deadline; never parse or execute the rejected data.
+            if self._body_read or self.headers.get_all("Transfer-Encoding"):
+                return
+            lengths = self.headers.get_all("Content-Length", [])
+            if len(lengths) != 1 or not re.fullmatch(r"[0-9]+", lengths[0]):
+                return
+            remaining = int(lengths[0]) if len(lengths[0]) < 8 else 0
+            if not 0 < remaining <= 65536:
+                return
+            self.close_connection = True
+            deadline = time.monotonic() + 0.1
+            try:
+                self.wfile.flush()
+                self.connection.shutdown(socket.SHUT_WR)
+                while remaining:
+                    timeout = deadline - time.monotonic()
+                    if timeout <= 0:
+                        break
+                    self.connection.settimeout(timeout)
+                    chunk = self.rfile.read1(min(remaining, 8192))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+            except OSError:
+                pass
+
+        def send_error(self, code, message=None, explain=None):
+            super().send_error(code, message, explain)
+            if code >= 400 and hasattr(self, "headers"):
+                self._drain_rejected_body()
 
         def _trusted_authority(self, value: str, scheme: str = "http") -> bool:
             try:
@@ -258,6 +296,8 @@ def make_handler(server: DashboardServer):
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
             self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
+            if status_code >= 400:
+                self._drain_rejected_body()
 
         def _send_text(self, status_code: int, text: str, content_type: str = "text/plain; charset=utf-8"):
             self.send_response(status_code)
@@ -309,6 +349,7 @@ def make_handler(server: DashboardServer):
                 settled, pending = server.overview_from_topics(meta_list)
                 res = {
                     "topics": meta_list,
+                    "capabilities": {"edit_latest_round": True, "partially_accepted": True},
                     "settled_decisions": settled,
                     "open_questions": pending,
                     "changelog": server.db.get_changelog(),
@@ -417,6 +458,7 @@ def make_handler(server: DashboardServer):
                 return
 
             try:
+                self._body_read = True
                 raw_bytes = self.rfile.read(length) if length > 0 else b"{}"
             except (TimeoutError, OSError):
                 self._send_json(408, {"error": "request_timeout", "message": "请求体读取超时或中断"})

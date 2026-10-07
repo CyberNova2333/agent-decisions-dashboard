@@ -5,7 +5,7 @@
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Python: 3.9+](https://img.shields.io/badge/Python-3.9%2B-brightgreen.svg)](https://python.org)
-![Zero Dependency](https://img.shields.io/badge/Dependencies-Zero%20(Standard%20Lib)-orange.svg)
+![Python runtime: Standard Library](https://img.shields.io/badge/Python_Runtime-Standard_Library-orange.svg)
 [![Tests: unittest](https://img.shields.io/badge/Tests-unittest-blue.svg)](./tests/)
 
 在人类与 AI 智能体（Agent）进行长程、复杂的工程研发与协同编码时，传统的大文档容易发生**“历史结论被冲刷覆盖”、“多轮答复无法精确定位追溯”、“AI 重复提出已被明确否决的旧提案”、“代码已拍板但无法区分实现与决策”**等痛点。
@@ -19,14 +19,20 @@
 | 使用环节 | 实际行为 |
 |---|---|
 | 新建 | 页面“新建议题”填写 ID、标题、可选所属对象和正文，创建为待决策、尚无结论、未开始 |
-| 讨论与决策 | 追加用户意见和团队答复，独立设置工作流、结论与实现状态；否决必须有原因 |
-| 查看 | 工作流、结论、实现状态及业务对象筛选；搜索标题、摘要、否决原因和最新答复；展开完整正文和历史 |
+| 讨论与决策 | 追加多行原话和答复；可修改最近一轮，旧内容留在版本历史；支持“部分同意”，需说明同意范围；否决必须有原因 |
+| 查看 | 工作流、结论、实现状态及业务对象筛选；搜索标题、摘要、否决原因和最新答复；单项或批量展开/收起当前筛选下的议题；刷新最新状态 |
+| Markdown | 保留单次换行；支持表格、标题、列表、引用、代码围栏与安全链接；本地按需绘制 Mermaid 流程图 |
 | 概览 | “已定结论”从当前已决策且未暂缓/替代的议题生成，明确标示否决；“待决策”对应 pending 议题 |
 | 引用 | 复制带完整本机 URL 的议题链接；链接打开后定位并展开议题 |
+| 外观 | 默认粉白配色；顶栏可选樱粉、蓝、紫、青绿或琥珀，独立切换深浅模式；当前浏览器记住选择，主按钮统一使用白字 |
 | 追溯 | 单议题恢复、撤销创建、全库快照恢复；Git 提交状态独立反馈 |
 | Agent 与维护 | AGENTS.md 与可选只读检查钩子、完整上下文导出、人工核验证据登记、一致性检查、索引重建、SQLite 在线备份 |
 
-页面编辑器用于追加讨论和更新状态；已有议题的标题、正文和分类修改使用保存 API 或编辑权威 Markdown 后重建索引。页面的 Markdown 展示仅支持少量安全格式，不是完整 CommonMark 渲染器。离线初次打开显示明确标识的示例数据，不是已保存项目的离线副本。
+页面编辑器用于追加讨论、修改最近一轮和更新状态；更早轮次保持只读，可在新一轮追加更正。已有议题的标题、正文和分类修改使用保存 API 或编辑权威 Markdown 后核对并重建索引。直接修改文件不会自动覆盖索引；“刷新”会检查并提示不同步。页面保留编辑草稿，保存后刷新列表并使旧详情缓存失效，保持刚保存的议题展开并定位；如果状态变更后不再符合原筛选条件，会提示并清除筛选以显示该议题。
+
+Markdown 是安全的有限格式渲染器，不支持原始 HTML、完整 CommonMark 或任意插件。议题链接可写 `[议题名](#topic-id)` 或 `[议题名](decisions/topic-id.md)`；外部链接仅支持 HTTP(S)。流程图使用 `mermaid` 代码围栏，例如 `flowchart LR` 开头的图。Mermaid 12.1.0 已随项目提供本地资源，仅在图表可见时加载，使用严格模式；不执行图表配置指令，不加载图表外部图片，语法错误时保留源码并显示原因。大型图表限制为 50,000 字符、500 条边。
+
+离线初次打开显示明确标识的示例数据，不是已保存项目的离线副本。
 
 ---
 
@@ -140,7 +146,7 @@ flowchart TD
 ### 1. 运行环境要求
 - Python 3.9 及以上
 - Git（仅自动提交功能需要；使用前配置仓库与提交身份）
-- **零外部第三方依赖**（纯标准库实现）
+- **Python 服务仅使用标准库**；浏览器图表库已随项目打包，无需 npm 安装或运行时访问 CDN。Mermaid 的版本、完整性与 MIT 许可见 [`web/vendor/`](./web/vendor/)。
 
 ### 2. 启动服务
 - **Windows 用户**：双击运行 [`start_dashboard.bat`](./start_dashboard.bat)
@@ -246,6 +252,10 @@ saved = post("/api/topic/adr-storage/save", payload, request_id)
 ```
 
 省略已有议题的字段会保留原值；`content_override` 修改正文。网络异常时用相同 `payload` 和 `request_id` 重试；不要重新生成 ID 或盲目替换版本号。`409` 后读取最新内容并核对，`428` 表示缺少版本前提。直接调用 Python `DecisionService` 的版本参数仍可选，脚本应主动携带读取版本。
+
+修改最近一轮时向同一保存接口传 `edit_latest_round: true`，必须带 `expected_version`，并用 `new_user_opinion` / `new_agent_reply` 指定要改的字段；省略的另一方回复保留，空字符串表示清空。修改生成新版本和快照，不增加讨论轮数，旧回复可在历史中恢复。并发新增轮次或同版本文件漂移会阻止覆盖；页面对新轮次冲突仅允许保留草稿后改为追加更正。
+
+`decision_outcome: "partially_accepted"` 表示部分同意；首次切换时须在 `new_user_opinion` 说明范围。概览和筛选单独标示，Agent 上下文保留全部原话并明确其余内容尚未获同意，不把整项提案列为已完全采纳。
 
 ---
 
