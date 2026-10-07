@@ -68,6 +68,12 @@
     hasLoadedTopics: false,
     pendingRestores: Object.create(null),
     historyRevision: null,
+    review: {
+      active: false,
+      index: 0,
+      drafts: new Map(),
+      saving: false,
+    },
   };
 
   // Server/user strings must never be interpreted as HTML or executable JS.
@@ -148,6 +154,7 @@
         renderOpenQuestions();
         renderChangelog();
         updateSidebarCounts();
+        if (state.review.active) renderReview();
         return true;
       }
     } catch (e) {
@@ -1303,6 +1310,190 @@
     document.getElementById("modal-create-topic").classList.add("active");
   }
 
+  const REVIEW_WORKFLOW_OPTIONS = [
+    ["decided", "🟢 已决策"], ["discussing", "🟡 待讨论"], ["pending", "🔴 待决策"],
+    ["deferred", "⏳ 推迟再议"], ["superseded", "📦 已被替代"],
+  ];
+  const REVIEW_OUTCOME_OPTIONS = [
+    ["", "尚无结论"], ["accepted", "🟢 已同意"], ["partially_accepted", "◐ 部分同意"], ["rejected", "❌ 已否决"],
+  ];
+
+  function reviewTopics() {
+    return state.topicsMeta;
+  }
+
+  function reviewDraftFor(topic) {
+    let draft = state.review.drafts.get(topic.id);
+    if (draft) return draft;
+    const values = valuesFromMeta(topic);
+    const mode = Number(topic.rounds_count) > 0 ? "amend" : "append";
+    draft = {
+      topicId: topic.id,
+      mode,
+      base: { ...topic },
+      workflow_state: getCanonicalWorkflow(topic),
+      decision_outcome: getCanonicalOutcome(topic),
+      implementation_state: values.implementation_state,
+      rejection_reason: values.rejection_reason,
+      superseded_by: values.superseded_by,
+      impl_commit: values.impl_commit,
+      new_user_opinion: values.new_user_opinion,
+      new_agent_reply: values.new_agent_reply,
+      commit_message: mode === "amend"
+        ? `更正第 ${topic.rounds_count} 轮回复 [${topic.title}]`
+        : `第 1 轮决策：确认 [${topic.title}]`,
+    };
+    state.review.drafts.set(topic.id, draft);
+    return draft;
+  }
+
+  function renderReviewChoiceGroup(containerId, options, selected) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    container.innerHTML = options.map(([value, label]) =>
+      `<button type="button" class="review-choice${value === selected ? " selected" : ""}" data-review-choice="${escapeHtml(value)}">${escapeHtml(label)}</button>`
+    ).join("");
+  }
+
+  function renderReview() {
+    if (!state.review.active) return;
+    const topics = reviewTopics();
+    if (!topics.length) {
+      closeReviewView();
+      return;
+    }
+    state.review.index = Math.max(0, Math.min(state.review.index, topics.length - 1));
+    const topic = topics[state.review.index];
+    const draft = reviewDraftFor(topic);
+    const indexEl = document.getElementById("review-index");
+    const totalEl = document.getElementById("review-total");
+    const idEl = document.getElementById("review-topic-id");
+    const titleEl = document.getElementById("review-topic-title");
+    const metaEl = document.getElementById("review-topic-meta");
+    const coreEl = document.getElementById("review-core");
+    if (indexEl) indexEl.textContent = String(state.review.index + 1).padStart(2, "0");
+    if (totalEl) totalEl.textContent = String(topics.length).padStart(2, "0");
+    if (idEl) idEl.textContent = `#${topic.id}`;
+    if (titleEl) titleEl.textContent = topic.title || topic.id;
+    if (metaEl) {
+      const lc = getLifecycleBadge(draft.workflow_state);
+      metaEl.innerHTML = `<span class="badge ${escapeHtml(lc.badge_class)}">${escapeHtml(lc.badge)}</span><span class="chip">${escapeHtml(topic.object || "通用")}</span><span class="chip">${escapeHtml(topic.function || "规范")}</span><span class="chip">v${escapeHtml(topic.version || 1)}</span>`;
+    }
+    if (coreEl) coreEl.innerHTML = renderMarkdown(topic.summary || "暂无核心论述");
+    renderReviewChoiceGroup("review-workflow-options", REVIEW_WORKFLOW_OPTIONS, draft.workflow_state);
+    renderReviewChoiceGroup("review-outcome-options", REVIEW_OUTCOME_OPTIONS, draft.decision_outcome);
+    const implementation = document.getElementById("review-implementation-select");
+    if (implementation) implementation.value = draft.implementation_state || "not_started";
+    const userOpinion = document.getElementById("review-user-opinion");
+    if (userOpinion) userOpinion.textContent = draft.new_user_opinion || "暂无原话记录";
+    const opinion = document.getElementById("review-opinion-input");
+    if (opinion && document.activeElement !== opinion) opinion.value = draft.new_agent_reply || "";
+    const status = document.getElementById("review-save-status");
+    if (status) status.textContent = draft.mode === "amend" ? "提交将修改最近一轮，原文保留在版本历史中。" : "该议题尚无讨论轮次，提交将追加第一轮。";
+    const overview = document.getElementById("review-overview");
+    if (overview) {
+      overview.innerHTML = topics.map((item, itemIndex) => `<button type="button" class="review-overview-card${itemIndex === state.review.index ? " selected" : ""}" data-review-index="${itemIndex}"><span class="review-overview-number">${String(itemIndex + 1).padStart(2, "0")} / ${String(topics.length).padStart(2, "0")}</span><span class="review-overview-title">${escapeHtml(item.title || item.id)}</span></button>`).join("");
+    }
+    const previous = document.getElementById("btn-review-previous");
+    const next = document.getElementById("btn-review-next");
+    if (previous) previous.disabled = state.review.index === 0 || state.review.saving;
+    if (next) next.disabled = state.review.index === topics.length - 1 || state.review.saving;
+    const submit = document.getElementById("btn-review-submit");
+    if (submit) submit.disabled = state.review.saving || !state.isServerOnline;
+  }
+
+  function openReviewView(topicId = null) {
+    const topics = reviewTopics();
+    if (!topics.length) {
+      showToast("当前没有可阅卷的议题。", "warning");
+      return;
+    }
+    const target = topicId ? topics.findIndex((item) => item.id === topicId) : -1;
+    state.review.index = target >= 0 ? target : 0;
+    state.review.active = true;
+    document.getElementById("review-view")?.classList.add("active");
+    document.getElementById("review-view")?.setAttribute("aria-hidden", "false");
+    document.body.classList.add("review-open");
+    renderReview();
+  }
+
+  function closeReviewView() {
+    rememberReviewDraft();
+    state.review.active = false;
+    state.review.saving = false;
+    document.getElementById("review-view")?.classList.remove("active");
+    document.getElementById("review-view")?.setAttribute("aria-hidden", "true");
+    document.body.classList.remove("review-open");
+  }
+
+  function rememberReviewDraft() {
+    if (!state.review.active) return;
+    const topic = reviewTopics()[state.review.index];
+    if (!topic) return;
+    const draft = reviewDraftFor(topic);
+    const opinion = document.getElementById("review-opinion-input");
+    const implementation = document.getElementById("review-implementation-select");
+    if (opinion) draft.new_agent_reply = opinion.value;
+    if (implementation) draft.implementation_state = implementation.value;
+  }
+
+  async function submitReview() {
+    if (state.review.saving || !state.isServerOnline) return;
+    const topic = reviewTopics()[state.review.index];
+    if (!topic) return;
+    rememberReviewDraft();
+    const draft = reviewDraftFor(topic);
+    if (!draft.commit_message.trim()) draft.commit_message = `阅卷提交：${topic.title}`;
+    if (["deferred", "superseded"].includes(draft.workflow_state) && !state.capabilities.independent_progress) {
+      showToast("当前服务尚未支持独立的议题进展，请先更新服务。", "warning");
+      return;
+    }
+    if (draft.decision_outcome === "rejected" && !draft.rejection_reason.trim()) {
+      showToast("明确否决方案时，必须先在完整编辑器中填写否决原因。", "warning");
+      return;
+    }
+    state.review.saving = true;
+    renderReview();
+    try {
+      const latest = await latestTopicMetadata(topic.id);
+      if (!latest || latest.version !== topic.version) {
+        showToast("议题已被其他操作更新，请刷新后重新核对。", "warning");
+        state.review.saving = false;
+        renderReview();
+        return;
+      }
+      const requestId = createRequestId();
+      const session = { base: { ...topic }, draft, mode: draft.mode, topicId: topic.id };
+      const payload = decisionPayload(session, requestId);
+      if (draft.mode === "amend") payload.edit_latest_round = true;
+      const response = await fetch(`${topicPath(topic.id)}/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Request-ID": requestId, "X-Expected-Version": String(topic.version) },
+        body: JSON.stringify(payload),
+      });
+      const result = await response.json();
+      if (response.status === 409 && result.error === "version_conflict") {
+        showToast("版本冲突：请刷新后重新核对该议题。", "warning");
+        return;
+      }
+      if (!response.ok || result.status !== "success") {
+        showToast(`保存被拒绝：${result.message || result.error || `HTTP ${response.status}`}`, "error");
+        return;
+      }
+      state.review.drafts.delete(topic.id);
+      showToast(`已提交“${topic.title}”，当前版本 v${result.new_version}。`);
+      await loadMetadataList();
+      const refreshedIndex = reviewTopics().findIndex((item) => item.id === topic.id);
+      if (refreshedIndex >= 0) state.review.index = refreshedIndex;
+      renderReview();
+    } catch (error) {
+      showToast(`无法保存：${error.message}`, "error");
+    } finally {
+      state.review.saving = false;
+      renderReview();
+    }
+  }
+
   async function submitCreate() {
     if (state.creating || !state.isServerOnline) return;
     const status = document.getElementById("create-status");
@@ -1701,6 +1892,44 @@
         else showToast("已刷新最新状态。");
       } catch (_) { showToast("列表已刷新，但数据一致性尚未确认。", "warning"); }
     });
+    document.getElementById("btn-review-view")?.addEventListener("click", () => openReviewView(state.selectedTopicId));
+    document.getElementById("btn-review-close")?.addEventListener("click", closeReviewView);
+    document.getElementById("btn-review-previous")?.addEventListener("click", () => {
+      if (state.review.index > 0 && !state.review.saving) {
+        rememberReviewDraft();
+        state.review.index -= 1;
+        renderReview();
+      }
+    });
+    document.getElementById("btn-review-next")?.addEventListener("click", () => {
+      if (state.review.index < reviewTopics().length - 1 && !state.review.saving) {
+        rememberReviewDraft();
+        state.review.index += 1;
+        renderReview();
+      }
+    });
+    document.getElementById("btn-review-submit")?.addEventListener("click", submitReview);
+    document.getElementById("review-implementation-select")?.addEventListener("change", rememberReviewDraft);
+    document.getElementById("review-opinion-input")?.addEventListener("input", rememberReviewDraft);
+    document.getElementById("review-view")?.addEventListener("click", (event) => {
+      const choice = event.target.closest?.("[data-review-choice]");
+      if (choice) {
+        const topic = reviewTopics()[state.review.index];
+        if (!topic || state.review.saving) return;
+        const draft = reviewDraftFor(topic);
+        const group = choice.parentElement?.id;
+        if (group === "review-workflow-options") draft.workflow_state = choice.dataset.reviewChoice;
+        if (group === "review-outcome-options") draft.decision_outcome = choice.dataset.reviewChoice;
+        renderReview();
+        return;
+      }
+      const overview = event.target.closest?.("[data-review-index]");
+      if (overview && !state.review.saving) {
+        rememberReviewDraft();
+        state.review.index = Number(overview.dataset.reviewIndex) || 0;
+        renderReview();
+      }
+    });
     document.addEventListener("click", (event) => {
       const link = event.target.closest?.("a[href]");
       if (!link || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button !== 0) return;
@@ -1825,5 +2054,8 @@
     closeModal,
     closeDrawer,
     resetFilters,
+    openReviewView,
+    closeReviewView,
+    submitReview,
   };
 })();

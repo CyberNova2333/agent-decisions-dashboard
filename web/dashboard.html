@@ -160,6 +160,7 @@
             <button class="btn btn-secondary" id="btn-view-grid" style="border: none; border-radius: 0;" title="网格卡片">⊞</button>
             <button class="btn btn-secondary" id="btn-view-list" style="border: none; border-radius: 0;" title="紧凑列表">☰</button>
           </div>
+          <button class="btn btn-primary" id="btn-review-view" title="进入阅卷式逐题处理视图">📝 阅卷视图</button>
         </div>
       </div>
 
@@ -189,6 +190,73 @@
       </section>
     </main>
   </div>
+
+  <!-- View: Full-screen review sheet -->
+  <section id="review-view" class="review-view" aria-hidden="true">
+    <div class="review-shell">
+      <header class="review-header">
+        <div class="review-counter" aria-label="当前议题序号">
+          <span class="review-index" id="review-index">01</span>
+          <span class="review-counter-separator">/</span>
+          <span class="review-total" id="review-total">42</span>
+        </div>
+        <div class="review-heading">
+          <span class="review-topic-id" id="review-topic-id">#topic</span>
+          <h2 id="review-topic-title">阅卷视图</h2>
+        </div>
+        <button class="btn btn-secondary" id="btn-review-close" type="button">返回看板</button>
+      </header>
+
+      <div class="review-body">
+        <div class="review-topic-meta" id="review-topic-meta"></div>
+        <div class="review-core" id="review-core"></div>
+
+        <div class="review-choice-grid">
+          <div class="review-choice-block">
+            <div class="review-label">议题进展（何时继续）</div>
+            <div class="review-choice-group" id="review-workflow-options" role="group" aria-label="议题进展"></div>
+          </div>
+          <div class="review-choice-block">
+            <div class="review-label">决策结论（是否同意）</div>
+            <div class="review-choice-group" id="review-outcome-options" role="group" aria-label="决策结论"></div>
+          </div>
+        </div>
+
+        <div class="review-implementation">
+          <label class="review-label" for="review-implementation-select">实现状态</label>
+          <select class="form-select" id="review-implementation-select">
+            <option value="not_started">未开始</option>
+            <option value="in_progress">进行中</option>
+            <option value="implemented">已实现</option>
+            <option value="verified">已核验</option>
+          </select>
+        </div>
+
+        <div class="review-latest-opinion">
+          <div class="review-label">最近一轮用户意见（只读原话）</div>
+          <div class="review-readonly" id="review-user-opinion">暂无原话记录</div>
+        </div>
+
+        <div class="review-edit-opinion">
+          <label class="review-label" for="review-opinion-input">修改意见 / Agent 落实说明</label>
+          <textarea class="form-textarea" id="review-opinion-input" rows="5" placeholder="修改最近一轮答复；保存后原文会留在版本历史中"></textarea>
+        </div>
+
+        <div class="review-overview-heading">
+          <span>议题总览</span>
+          <span class="review-overview-hint">全部议题按当前列表顺序排列</span>
+        </div>
+        <div class="review-overview" id="review-overview"></div>
+      </div>
+
+      <footer class="review-footer">
+        <button class="btn btn-secondary" id="btn-review-previous" type="button">← 上一个</button>
+        <button class="btn btn-secondary" id="btn-review-next" type="button">下一个 →</button>
+        <span class="review-save-status" id="review-save-status" role="status"></span>
+        <button class="btn btn-primary" id="btn-review-submit" type="button">提交当前议题</button>
+      </footer>
+    </div>
+  </section>
 
   <div class="modal-backdrop" id="modal-create-topic">
     <div class="modal-card">
