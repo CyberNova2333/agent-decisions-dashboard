@@ -153,6 +153,26 @@ class DashboardServer:
             })
         return topics_list
 
+    def load_changelog(self) -> list:
+        """读取当前产品视图的变更记录。
+
+        议题变更的 scope 采用 ``[标题](#topic-id)`` 链接格式；启用活动范围
+        时隐藏已迁出的议题，无法关联议题的全局记录仍保留。数据库本身不做
+        删除，因此归档快照和直接议题查询仍能看到完整历史。
+        """
+        changes = self.db.get_changelog()
+        active_ids = self.config.active_topic_ids
+        if active_ids is None:
+            return changes
+        filtered = []
+        for change in changes:
+            scope = str(change.get("scope") or "")
+            match = re.search(r"\(#([A-Za-z0-9][A-Za-z0-9_-]*)\)", scope)
+            if match and match.group(1) not in active_ids:
+                continue
+            filtered.append(change)
+        return filtered
+
     @staticmethod
     def overview_from_topics(topics):
         """概览是当前议题的投影，不依赖需要另外维护的历史导入表。"""
@@ -356,7 +376,7 @@ def make_handler(server: DashboardServer):
                     "capabilities": {"edit_latest_round": True, "partially_accepted": True, "independent_progress": True},
                     "settled_decisions": settled,
                     "open_questions": pending,
-                    "changelog": server.db.get_changelog(),
+                    "changelog": server.load_changelog(),
                     "config": server.config.to_dict()
                 }
                 self._send_json(200, res)

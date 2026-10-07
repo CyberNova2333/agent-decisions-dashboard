@@ -21,6 +21,8 @@ class TopicScopeTests(unittest.TestCase):
                                       "decision_outcome": "accepted"})
         self.svc.save_topic("archive", {"title": "Archived", "workflow_state": "decided",
                                          "decision_outcome": "accepted"})
+        self.svc.db.record_changelog("[Archived](#archive)", "Hidden change", "test")
+        self.svc.db.record_changelog("全局维护", "Visible global change", "test")
 
     def test_topic_list_and_agent_context_use_active_scope(self):
         app = DashboardServer.__new__(DashboardServer)
@@ -33,6 +35,7 @@ class TopicScopeTests(unittest.TestCase):
         context = AgentContextEngine(self.cfg, self.svc.db).query_context()
         self.assertEqual(context["counts"]["total_matched"], 1)
         self.assertEqual(context["active_decisions"][0]["id"], "keep")
+        self.assertEqual([item["change"] for item in app.load_changelog()], ["Visible global change"])
 
     def test_unscoped_config_keeps_legacy_behavior(self):
         cfg = Config({"git_commit": {"enabled": False}}, self.root)
