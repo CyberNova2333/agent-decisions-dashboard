@@ -52,7 +52,7 @@ Path("receipt.json").write_text(json.dumps(receipt, ensure_ascii=False), encodin
 
 仅在用户明确要求修改已提交的最近一轮时，可加 `edit_latest_round: true`。带读取时的版本，只提交需要修改的 `new_user_opinion` 或 `new_agent_reply`，另一方字段省略则保持原文；旧内容留在历史快照中。不得用该参数重写更早轮次，也不能在有新轮次后盲目换版本重试。默认仍使用追加讨论。
 
-部分同意使用 `decision_outcome: "partially_accepted"`，并在用户原话里明确同意与保留的范围。此状态不代表整个提案成为执行要求，Agent 需按原话逐项理解。
+部分同意使用 `decision_outcome: "partially_accepted"`，并在用户原话里明确同意与保留的范围。切换到该结论时服务要求非空用户意见，但不自动理解同意范围。此类议题进入 `pending_requirements`，不整项进入 `active_decisions`；若工作流为 `decided`，仍可在页面“已定结论”中看到“部分同意”标注。页面概览与 Agent 清单用途不同，Agent 需按原话逐项理解。
 
 创建使用 `POST /api/topic/create`，传 `id`、`title`、可选 `content_override` 及状态。已有议题省略的字段保留原值；空字符串表示明确清空支持清空的字段。核验使用 `POST /api/topic/:id/verify`，传 `expected_version`、`request_id`、`impl_commit`、`verifier`、`test_summary` 和布尔 `mark_verified`；这只登记调用者提供的证据，服务不替你运行测试。
 

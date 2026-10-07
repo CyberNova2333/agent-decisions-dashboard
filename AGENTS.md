@@ -38,3 +38,4 @@
 - 当前仅支持一个进程管理一个数据目录；CLI 维护应停止服务后执行。不要把进程内锁、异常补偿测试说成跨进程协调或断电自动恢复。
 - 有代码变更后运行相关回归；完成一轮修复后运行 `python -m unittest discover tests`、`node --test tests/markdown.test.js`、`node --check web/app.js` 和 `git diff --check`。页面交互有改动时用浏览器检查，覆盖新建、追加、更正、筛选与保存后的定位；测试跳过、未验证平台和剩余边界应明确报告。
 - 用户未要求时，不提交、推送或安装全局钩子。自动 Git 提交是看板处理用户记录的可配置功能，不代表 Agent 获得任意工程提交权限。
+- Agent 参与的工程提交按实际参与者添加 `Co-authored-by` 尾注；Codex 使用 `Co-authored-by: Codex <noreply@openai.com>`。保留环境已有的提交作者与签名身份，提交前核对尾注。`git_commit.co_author` 仅影响看板自动提交，不会为手工执行的 `git commit` 自动补署名。
