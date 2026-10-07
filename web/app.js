@@ -73,6 +73,8 @@
       index: 0,
       drafts: new Map(),
       saving: false,
+      detailRequest: 0,
+      overviewOpen: false,
     },
   };
 
@@ -1355,6 +1357,62 @@
     ).join("");
   }
 
+  function renderReviewDetailContent(detail) {
+    const rounds = Array.isArray(detail?.rounds) ? detail.rounds : [];
+    const roundsHtml = rounds.map((round) => `
+      <div class="review-round">
+        <div style="font-weight: 700; font-size: 0.82rem; margin-bottom: 0.3rem; color: var(--text-main);">${escapeHtml(round.title || "讨论轮次")}</div>
+        <div style="font-size: 0.82rem; line-height: 1.5; color: var(--text-main);">${renderMarkdown(round.content || "")}</div>
+      </div>
+    `).join("");
+    return `
+      <div>
+        <h4>📖 核心论述与现实依据</h4>
+        <div class="markdown-body">${renderMarkdown(detail?.core_content || "暂无核心正文")}</div>
+      </div>
+      <div>
+        <h4>📜 历史多轮决策演进（${rounds.length} 轮）</h4>
+        ${roundsHtml || '<div style="color: var(--text-muted); font-size: 0.8rem;">暂无既往轮次</div>'}
+      </div>
+    `;
+  }
+
+  async function renderReviewDetail(topic) {
+    const detailEl = document.getElementById("review-detail-body");
+    if (!detailEl) return;
+    const request = ++state.review.detailRequest;
+    detailEl.innerHTML = `<div style="color: var(--text-dim); text-align: center; padding: 1rem;">正在加载 ${escapeHtml(topic.id)} 的展开详情...</div>`;
+    try {
+      const detail = await fetchTopicDetail(topic.id);
+      if (!state.review.active || request !== state.review.detailRequest) return;
+      const current = reviewTopics()[state.review.index];
+      if (!current || current.id !== topic.id) return;
+      if (detail.version != null && topic.version != null && detail.version !== topic.version) {
+        detailEl.textContent = "议题已更新或文件与索引不一致，请点击刷新核对最新状态。";
+        return;
+      }
+      detailEl.innerHTML = renderReviewDetailContent(detail);
+    } catch (error) {
+      if (state.review.active && request === state.review.detailRequest) {
+        detailEl.textContent = `展开详情加载失败：${error.message || "未知错误"}`;
+      }
+    }
+  }
+
+  function setReviewOverviewOpen(open) {
+    state.review.overviewOpen = Boolean(open);
+    const panel = document.getElementById("review-overview-panel");
+    const button = document.getElementById("btn-review-overview");
+    if (panel) {
+      panel.classList.toggle("active", state.review.overviewOpen);
+      panel.setAttribute("aria-hidden", state.review.overviewOpen ? "false" : "true");
+    }
+    if (button) {
+      button.setAttribute("aria-expanded", state.review.overviewOpen ? "true" : "false");
+      button.textContent = state.review.overviewOpen ? "收起总览" : "议题总览";
+    }
+  }
+
   function renderReview() {
     if (!state.review.active) return;
     const topics = reviewTopics();
@@ -1370,7 +1428,6 @@
     const idEl = document.getElementById("review-topic-id");
     const titleEl = document.getElementById("review-topic-title");
     const metaEl = document.getElementById("review-topic-meta");
-    const coreEl = document.getElementById("review-core");
     if (indexEl) indexEl.textContent = String(state.review.index + 1).padStart(2, "0");
     if (totalEl) totalEl.textContent = String(topics.length).padStart(2, "0");
     if (idEl) idEl.textContent = `#${topic.id}`;
@@ -1379,9 +1436,9 @@
       const lc = getLifecycleBadge(draft.workflow_state);
       metaEl.innerHTML = `<span class="badge ${escapeHtml(lc.badge_class)}">${escapeHtml(lc.badge)}</span><span class="chip">${escapeHtml(topic.object || "通用")}</span><span class="chip">${escapeHtml(topic.function || "规范")}</span><span class="chip">v${escapeHtml(topic.version || 1)}</span>`;
     }
-    if (coreEl) coreEl.innerHTML = renderMarkdown(topic.summary || "暂无核心论述");
     renderReviewChoiceGroup("review-workflow-options", REVIEW_WORKFLOW_OPTIONS, draft.workflow_state);
     renderReviewChoiceGroup("review-outcome-options", REVIEW_OUTCOME_OPTIONS, draft.decision_outcome);
+    renderReviewDetail(topic);
     const implementation = document.getElementById("review-implementation-select");
     if (implementation) implementation.value = draft.implementation_state || "not_started";
     const userOpinion = document.getElementById("review-user-opinion");
@@ -1394,6 +1451,7 @@
     if (overview) {
       overview.innerHTML = topics.map((item, itemIndex) => `<button type="button" class="review-overview-card${itemIndex === state.review.index ? " selected" : ""}" data-review-index="${itemIndex}"><span class="review-overview-number">${String(itemIndex + 1).padStart(2, "0")} / ${String(topics.length).padStart(2, "0")}</span><span class="review-overview-title">${escapeHtml(item.title || item.id)}</span></button>`).join("");
     }
+    setReviewOverviewOpen(state.review.overviewOpen);
     const previous = document.getElementById("btn-review-previous");
     const next = document.getElementById("btn-review-next");
     if (previous) previous.disabled = state.review.index === 0 || state.review.saving;
@@ -1421,6 +1479,8 @@
     rememberReviewDraft();
     state.review.active = false;
     state.review.saving = false;
+    state.review.detailRequest += 1;
+    setReviewOverviewOpen(false);
     document.getElementById("review-view")?.classList.remove("active");
     document.getElementById("review-view")?.setAttribute("aria-hidden", "true");
     document.body.classList.remove("review-open");
@@ -1894,9 +1954,11 @@
     });
     document.getElementById("btn-review-view")?.addEventListener("click", () => openReviewView(state.selectedTopicId));
     document.getElementById("btn-review-close")?.addEventListener("click", closeReviewView);
+    document.getElementById("btn-review-overview")?.addEventListener("click", () => setReviewOverviewOpen(!state.review.overviewOpen));
     document.getElementById("btn-review-previous")?.addEventListener("click", () => {
       if (state.review.index > 0 && !state.review.saving) {
         rememberReviewDraft();
+        setReviewOverviewOpen(false);
         state.review.index -= 1;
         renderReview();
       }
@@ -1904,6 +1966,7 @@
     document.getElementById("btn-review-next")?.addEventListener("click", () => {
       if (state.review.index < reviewTopics().length - 1 && !state.review.saving) {
         rememberReviewDraft();
+        setReviewOverviewOpen(false);
         state.review.index += 1;
         renderReview();
       }
@@ -1927,6 +1990,7 @@
       if (overview && !state.review.saving) {
         rememberReviewDraft();
         state.review.index = Number(overview.dataset.reviewIndex) || 0;
+        setReviewOverviewOpen(false);
         renderReview();
       }
     });
@@ -1987,6 +2051,7 @@
     // Navigation items
     document.querySelectorAll(".nav-item").forEach((item) => {
       item.addEventListener("click", () => {
+        if (state.review.active) closeReviewView();
         document.querySelectorAll(".nav-item").forEach((n) => n.classList.remove("active"));
         item.classList.add("active");
         const view = item.getAttribute("data-view");
