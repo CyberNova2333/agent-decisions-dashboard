@@ -42,6 +42,8 @@ class AgentContextEngine:
         tid_lower = topic_id.lower() if topic_id else ""
 
         for t in all_topics:
+            if not self.config.topic_is_active(t["id"]):
+                continue
             if tid_lower and t["id"].lower() != tid_lower:
                 continue
 
