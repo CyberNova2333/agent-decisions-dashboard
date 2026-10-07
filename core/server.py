@@ -109,6 +109,8 @@ class DashboardServer:
         db_topics = self.db.get_all_topics()
         for r in db_topics:
             topic_id = r["id"]
+            if not self.config.topic_is_active(topic_id):
+                continue
 
             discussion = json.loads(r["discussion_json"]) if r.get("discussion_json") else []
             rounds = self.service._reconstruct_rounds_from_topic(dict(r, discussion=discussion))

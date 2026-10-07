@@ -21,6 +21,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "database_path": "decisions.db",
     "metadata_json_path": "decisions/metadata.json",
     "doc_data_json_path": "doc_data.json",
+    "topic_scope": {
+        "active_topic_ids": None
+    },
     "git_commit": {
         "enabled": True,
         "commit_prefix": "feat(decision)",
@@ -131,6 +134,30 @@ class Config:
     @property
     def categories(self) -> Dict[str, Any]:
         return self._data.get("categories", DEFAULT_CONFIG["categories"])
+
+    @property
+    def topic_scope(self) -> Dict[str, Any]:
+        """当前产品视图的议题范围；未配置时保持旧版显示全部议题。"""
+        scope = self._data.get("topic_scope", DEFAULT_CONFIG["topic_scope"])
+        return scope if isinstance(scope, dict) else DEFAULT_CONFIG["topic_scope"]
+
+    @property
+    def active_topic_ids(self):
+        """返回允许出现在当前列表/Agent上下文中的 ID 集合。
+
+        None 表示不启用范围过滤。被迁出的议题仍保留在数据库和 Markdown 中，
+        详情 API 可以按原 ID 直达，便于归档追溯。
+        """
+        raw_ids = self.topic_scope.get("active_topic_ids")
+        if raw_ids is None:
+            return None
+        if not isinstance(raw_ids, list):
+            raise ValueError("topic_scope.active_topic_ids 必须为数组或 null")
+        return {str(topic_id) for topic_id in raw_ids if str(topic_id).strip()}
+
+    def topic_is_active(self, topic_id: str) -> bool:
+        active_ids = self.active_topic_ids
+        return active_ids is None or topic_id in active_ids
 
     @property
     def lifecycle_states(self) -> list:
