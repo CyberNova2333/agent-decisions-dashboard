@@ -70,8 +70,8 @@ class DatabaseManager:
                     discussion_json TEXT,
                     updated_at TEXT NOT NULL,
                     version INTEGER DEFAULT 1,
-                    workflow_state TEXT DEFAULT 'discussing',      -- 'pending', 'discussing', 'decided'
-                    decision_outcome TEXT DEFAULT '',             -- 'accepted', 'rejected', 'deferred', 'superseded'
+                    workflow_state TEXT DEFAULT 'discussing',      -- pending, discussing, decided, deferred, superseded
+                    decision_outcome TEXT DEFAULT '',             -- accepted, partially_accepted, rejected; legacy progress aliases remain readable
                     rejection_reason TEXT DEFAULT '',             -- 否决原因与重新讨论条件
                     superseded_by TEXT DEFAULT '',                -- 被哪个议题所替代 (ID)
                     implementation_state TEXT DEFAULT 'not_started', -- 'not_started', 'in_progress', 'implemented', 'verified'

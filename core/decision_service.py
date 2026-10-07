@@ -20,7 +20,8 @@ from core.db import DatabaseManager, VersionConflictError
 from core.markdown_parser import TopicMarkdownParser
 from core.git_engine import GitEngine, GitCommitResult
 from core.recovery import RecoveryManager
-from core.contracts import validate_portable_id, canonical_impl_state
+from core.contracts import (validate_portable_id, canonical_impl_state, decision_axes,
+                            WORKFLOW_STATES, DECISION_OUTCOMES, LEGACY_PROGRESS_OUTCOMES)
 from core.locking import serialized
 
 class TopicValidationError(Exception):
@@ -124,6 +125,8 @@ class DecisionService:
                 return state["badge"]
         if lifecycle_id == "decided": return "🟢 已决策"
         if lifecycle_id == "pending": return "🔴 待决策"
+        if lifecycle_id == "deferred": return "⏳ 推迟再议"
+        if lifecycle_id == "superseded": return "📦 已被替代"
         return "🟡 待讨论"
 
     @serialized
@@ -306,8 +309,14 @@ class DecisionService:
         # 3. 准备议题字段与业务合法性校验
         prior = existing_row or {}
         title = data.get("title", prior.get("title", topic_id)).strip()
-        wf_state = data.get("workflow_state", data.get("lifecycle_status", prior.get("workflow_state") or "discussing"))
-        outcome = data.get("decision_outcome", prior.get("decision_outcome", ""))
+        prior_wf, prior_outcome = decision_axes(prior)
+        wf_state = data.get("workflow_state", data.get("lifecycle_status", prior_wf))
+        outcome = data.get("decision_outcome", prior_outcome)
+        if wf_state not in WORKFLOW_STATES:
+            raise TopicValidationError("无效的 workflow_state")
+        if outcome in LEGACY_PROGRESS_OUTCOMES:
+            # Old callers can still pause/replace a topic without erasing consent.
+            wf_state, outcome = outcome, prior_outcome
         rejection_reason = data.get("rejection_reason", prior.get("rejection_reason", "")).strip()
         superseded_by = data.get("superseded_by", "").strip()
 
@@ -318,9 +327,7 @@ class DecisionService:
         impl_state = canonical_impl_state(data.get("implementation_state", data.get("impl_status", prior.get("implementation_state") or "not_started")))
         if not title:
             raise TopicValidationError("议题标题不能为空")
-        if wf_state not in ("discussing", "pending", "decided"):
-            raise TopicValidationError("无效的 workflow_state")
-        if outcome not in ("", "accepted", "partially_accepted", "rejected", "deferred", "superseded"):
+        if outcome not in DECISION_OUTCOMES:
             raise TopicValidationError("无效的 decision_outcome")
         if outcome == "partially_accepted" and prior.get("decision_outcome") != outcome and not user_opinion:
             raise TopicValidationError("部分同意时，请在用户意见中说明已同意和仍保留的部分")
@@ -359,7 +366,7 @@ class DecisionService:
             func = data.get("function", "核心规范")
             priority = data.get("priority", "普通")
 
-        status_default = {"partially_accepted": "部分同意", "rejected": "已否决", "deferred": "暂缓", "superseded": "已替代"}.get(outcome, "已定" if wf_state == "decided" else "待定")
+        status_default = {"accepted": "已同意", "partially_accepted": "部分同意", "rejected": "已否决"}.get(outcome, "尚无结论")
         if wf_state == prior.get("workflow_state") and outcome == prior.get("decision_outcome"):
             status_default = prior.get("decision_status", status_default)
         dec_status = data.get("decision_status", status_default)

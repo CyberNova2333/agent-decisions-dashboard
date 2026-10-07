@@ -18,6 +18,7 @@ Python 服务仅使用标准库，界面是静态 HTML/CSS/JavaScript；Mermaid 
 | 新建议题 | 填写 ID、标题、可选所属对象和正文；页面创建为“待决策／尚无结论／未开始” |
 | 记录决策 | 追加多行用户意见和团队答复，分别设置工作流、决策结论与实现状态 |
 | **部分同意** | 独立结论 `partially_accepted`；切换为此结论时需填写用户意见，说明同意和保留的范围；卡片、筛选和概览单独标示 |
+| 推迟再议与替代 | 独立于是否同意；可记录“已同意，条件满足后再议”，保留已被替代议题的原结论与替代议题引用 |
 | 修改本轮 | 修改最近一轮已提交回复，保留修改前的版本；不增加讨论轮数，更早轮次只读 |
 | 查找与展开 | 按工作流、结论、实现状态和业务对象筛选；搜索 ID、标题、摘要、否决原因和最近有内容的答复；展开／收起当前筛选下的全部议题 |
 | 保存后定位 | 刷新状态和详情缓存，保持刚保存的议题展开并定位；若不再符合原筛选条件，会提示并清除筛选以显示目标 |
@@ -86,7 +87,7 @@ python -m core.server --config "D:/MyProject/dashboard.config.json" --no-browser
 
 | 字段 | 支持的值 |
 |---|---|
-| `workflow_state` | `pending` 待决策、`discussing` 待讨论、`decided` 已决策 |
+| `workflow_state` | `pending` 待决策、`discussing` 待讨论、`decided` 已决策、`deferred` 推迟再议、`superseded` 已被替代 |
 | `implementation_state` | `not_started` 未开始、`in_progress` 进行中、`implemented` 已实现、`verified` 已核验 |
 
 `decision_outcome` 的完整取值如下：
@@ -97,22 +98,28 @@ python -m core.server --config "D:/MyProject/dashboard.config.json" --no-browser
 | `accepted` | 采纳接受 |
 | **`partially_accepted`** | **部分同意**；从其他结论切换过来时，必须同时提交非空用户意见，说明哪些同意、哪些保留 |
 | `rejected` | 明确否决；必须有非空 `rejection_reason` |
-| `deferred` | 推迟再议／暂缓 |
-| `superseded` | 已被替代；可用 `superseded_by` 记录替代议题 |
 
 部分同意示例：“同意先保留本地文件；云端同步暂不接受，待隐私方案明确后再讨论。”服务检查用户意见是否非空，不自动理解或校验这段话的范围。否决原因中也可写重新讨论的前提，但没有单独的前提字段或语义校验。
+
+同意延期示例：Agent 建议“试点结束后再讨论”，用户认可此安排，记录为 `decision_outcome: "accepted"` + `workflow_state: "deferred"`，把试点结束这一前提写在原话中。不是立即实施的指令，也不是对未来具体方案的提前授权；同意范围以原话为准。进展可单独改回“待讨论／待决策／已决策”，不会清空同意结论或实现状态。没有自动日期提醒或条件判断。
+
+“已被替代”同样属于进展，保留旧议题的同意／部分同意／否决供追溯，可在页面或 API 的 `superseded_by` 填替代议题 ID。它不等于旧方案曾被否决。
+
+兼容旧记录：旧 `decision_outcome: "deferred" / "superseded"` 读取为对应进展，但不会推断为同意。原 Markdown 与历史快照不会因读取被改写，后续保存才转为独立字段。旧 API 请求仍接受这两个别名，改变进展并保留已有明确结论；新请求应使用上述独立字段。旧快照恢复后仍按同一兼容规则读取。
 
 页面与 Agent 导出的分类用途不同：
 
 | 入口 | 当前纳入规则 |
 |---|---|
-| 页面“已定结论” | 工作流为 `decided`，结论为空、`accepted`、`partially_accepted` 或 `rejected`；部分同意与否决单独标注 |
+| 页面“已定结论” | 进展为 `decided` 或 `deferred`，结论为 `accepted`、`partially_accepted` 或 `rejected`；部分同意、否决和推迟再议分别标注 |
 | 页面“待决策” | 工作流为 `pending`；不等于“所有尚未实现的议题” |
-| Agent `active_decisions` | 工作流为 `decided`，结论为 `accepted` 或兼容旧数据的空结论 |
-| Agent `rejected_proposals` | 明确否决的议题，包括兼容的旧否决文字 |
-| Agent `pending_requirements` | 未定议题、部分同意，以及已采纳但尚未核验的议题；部分同意不会整项进入 `active_decisions` |
+| Agent `active_decisions` | 进展为 `decided`，且结论明确为 `accepted`；尚无结论不算同意 |
+| Agent `rejected_proposals` | 未暂缓、未被替代的明确否决议题，包括兼容的旧否决文字 |
+| Agent `pending_requirements` | 未暂缓、未被替代的未定议题、部分同意，以及已采纳但尚未核验的议题；列入此表不表示获准实施 |
+| Agent `deferred_topics` | 全部推迟再议议题，保留结论、正文和讨论；应先核对原话中的继续条件，不进入立即推进清单 |
+| Agent `superseded_topics` | 已被替代议题及原结论、替代引用，仅供追溯，不继续作为当前要求或否决红线 |
 
-`deferred`、`superseded` 不列入 Agent 的当前要求清单。部分同意的导出保留完整正文与讨论，并提示按原话区分同意范围；不会自动把一个议题拆成多个要求。旧数据的空结论兼容规则不应代替新记录明确填写结论。
+部分同意的导出保留完整正文与讨论，并提示按原话区分同意范围；不会自动把一个议题拆成多个要求。`decided` 搭配空结论仍需确认，不会被页面或 Agent 当成已同意。
 
 “已核验”是调用者登记的状态。核验接口接收提交引用、核验人及测试说明，但不检查提交是否存在，也不运行测试；页面直接选择该状态同样不产生实际测试证据。
 
@@ -297,7 +304,7 @@ python -m core.agent_hooks --config "D:/MyProject/dashboard.config.json" before-
 python -m core.agent_hooks --config "D:/MyProject/dashboard.config.json" after-write --topic adr-storage --receipt "D:/MyProject/receipt.json"
 ```
 
-将 `adr-storage` 换成已有议题 ID。`before-task` 核对目标路径、一致性并读取当前结论；`after-write` 核对原始成功回执、当前版本与一致性，失败退出码为 2。指定暂缓／已替代议题时，钩子另附 `requested_topic` 供追溯；普通上下文清单仍按前述分类规则生成。
+将 `adr-storage` 换成已有议题 ID。`before-task` 核对目标路径、一致性并读取当前结论；`after-write` 核对原始成功回执、当前版本与一致性，失败退出码为 2。暂缓／已替代议题在上下文中各自单列；指定 `--topic` 时另附 `requested_topic` 原始详情供追溯。
 
 上下文按 `module` 匹配 section/object/function 子串，按 `path` 匹配正文或 section 子串；不分析代码依赖。导出保留匹配议题的完整正文和讨论，大台账宜按议题或模块查询。钩子只读，不会安装宿主钩子、修改全局配置、启动服务或证明代码已通过测试；需由宿主或操作者主动接入。
 
@@ -361,7 +368,7 @@ node --check web/diagrams.js
 git diff --check
 ```
 
-Python 回归覆盖保存、恢复、幂等性、并发版本检查、索引一致性、Git 暂存区保护、HTTP 边界与 Agent 钩子。[test_usability_regressions.py](./tests/test_usability_regressions.py) 覆盖部分同意、多行回复、最近一轮更正、历史保留和回执轮次；[markdown.test.js](./tests/markdown.test.js) 检查换行、表格、链接和转义。符号链接测试在主机不允许创建链接时跳过。
+Python 回归覆盖保存、恢复、幂等性、并发版本检查、索引一致性、Git 暂存区保护、HTTP 边界与 Agent 钩子。[使用回归](./tests/test_usability_regressions.py) 覆盖部分同意、多行回复、最近一轮更正、历史保留和回执轮次；[状态回归](./tests/test_progress_states.py) 覆盖进展与同意独立、旧记录保存／重试／恢复及 Agent 分类；[Markdown 测试](./tests/markdown.test.js) 检查换行、表格、链接和转义。符号链接测试在主机不允许创建链接时跳过。
 
 交互变更还需用独立台账进行浏览器检查：新建、部分同意、修改本轮及冲突、表格与 Mermaid、筛选、批量展开、保存后定位和主题切换。单元测试不代替这些检查，也不代表跨平台或断电恢复均已验证。
 

@@ -12,6 +12,7 @@ from core.config import Config
 from core.db import DatabaseManager
 from core.markdown_parser import TopicMarkdownParser
 from core.recovery import RecoveryManager
+from core.contracts import decision_axes
 
 class AgentContextEngine:
     def __init__(self, config: Config, db: Optional[DatabaseManager] = None):
@@ -61,10 +62,11 @@ class AgentContextEngine:
         active_decisions: List[Dict[str, Any]] = []
         rejected_proposals: List[Dict[str, Any]] = []
         pending_requirements: List[Dict[str, Any]] = []
+        deferred_topics: List[Dict[str, Any]] = []
+        superseded_topics: List[Dict[str, Any]] = []
 
         for t in filtered:
-            outcome = t.get("decision_outcome", "")
-            wf = t.get("workflow_state") or t.get("lifecycle_status", "discussing")
+            wf, outcome = decision_axes(t)
             impl = t.get("implementation_state") or "not_started"
 
             item = {
@@ -76,6 +78,8 @@ class AgentContextEngine:
                 "function": t.get("function", ""),
                 "workflow_state": wf,
                 "decision_outcome": outcome,
+                "superseded_by": t.get("superseded_by", ""),
+                "rejection_reason": t.get("rejection_reason", ""),
                 "implementation_state": impl,
                 "impl_commit": t.get("impl_commit", ""),
                 "impl_verifier": t.get("impl_verifier", ""),
@@ -85,15 +89,17 @@ class AgentContextEngine:
             }
 
             legacy_status = t.get("decision_status", "")
-            if outcome == "rejected" or (not outcome and "否决" in legacy_status and "非否决" not in legacy_status):
+            if wf == "superseded":
+                superseded_topics.append(item)
+            elif wf == "deferred":
+                # Agreement to wait remains visible, but is not an execution order.
+                deferred_topics.append(item)
+            elif outcome == "rejected" or (not outcome and "否决" in legacy_status and "非否决" not in legacy_status):
                 item["rejection_reason"] = t.get("rejection_reason", "未记录具体否决原因")
                 item["superseded_by"] = t.get("superseded_by", "")
                 if include_rejected:
                     rejected_proposals.append(item)
-            elif outcome in ["superseded", "deferred"]:
-                # 被替代或已暂缓的议题绝不进入“当前有效决策 (必须遵守)” (R09)
-                pass
-            elif wf == "decided" and outcome in ["accepted", ""]:
+            elif wf == "decided" and outcome == "accepted":
                 # 只有明确采纳的已定决策才属于强制遵守红线
                 active_decisions.append(item)
                 # 若尚未核验 (包括已实现但待核验 implemented)，进入待落实与待核验清单 (R09)
@@ -113,11 +119,15 @@ class AgentContextEngine:
                 "total_matched": len(filtered),
                 "active_decisions": len(active_decisions),
                 "rejected_proposals": len(rejected_proposals),
-                "pending_requirements": len(pending_requirements)
+                "pending_requirements": len(pending_requirements),
+                "deferred_topics": len(deferred_topics),
+                "superseded_topics": len(superseded_topics)
             },
             "active_decisions": active_decisions,
             "rejected_proposals": rejected_proposals if include_rejected else [],
-            "pending_requirements": pending_requirements
+            "pending_requirements": pending_requirements,
+            "deferred_topics": deferred_topics,
+            "superseded_topics": superseded_topics
         }
 
     def format_as_markdown(self, context_data: Dict[str, Any]) -> str:
@@ -167,6 +177,7 @@ class AgentContextEngine:
                 md.append("")
 
         md.append("## 3. 待落实与待核验清单")
+        md.append("未有明确同意的议题仍需确认；出现在本清单不代表获准实施。")
         md.append("")
         if not context_data["pending_requirements"]:
             md.append("*暂无待落实要求*")
@@ -182,6 +193,24 @@ class AgentContextEngine:
                         md.append(f"\n**{entry['key']}**\n\n{entry['val']}")
             md.append("")
 
+        for key, heading, note in (
+            ("deferred_topics", "4. 推迟再议", "同意结论独立保留；先读原话中的时间或前提，条件未满足时不要推进。尚无结论不等于同意延期或同意方案。"),
+            ("superseded_topics", "5. 已被替代", "以下记录仅供追溯，原有同意或否决不再作为当前约束；请读取替代议题。"),
+        ):
+            md.extend([f"## {heading}", "", note, ""])
+            for item in context_data.get(key, []):
+                md.append(f"### [{item['id']}] {item['title']} (v{item['version']})")
+                md.append(f"- **结论**：`{item['decision_outcome'] or '尚无结论'}` | **实现**：`{item['implementation_state']}`")
+                if item.get("superseded_by"):
+                    md.append(f"- **替代议题**：`#{item['superseded_by']}`")
+                if item.get("rejection_reason") and item["decision_outcome"] == "rejected":
+                    md.append(f"- **原否决原因**：{item['rejection_reason']}")
+                if item["decision_outcome"] == "partially_accepted":
+                    md.append("**部分同意**：只按原话中明确同意的范围处理，不能视为整项采纳。")
+                md.append(item.get("content", ""))
+                for entry in item.get("discussion", []):
+                    md.append(f"\n**{entry['key']}**\n\n{entry['val']}")
+                md.append("")
         return "\n".join(md)
 
     def record_verification(

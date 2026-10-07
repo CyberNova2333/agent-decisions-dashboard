@@ -90,7 +90,7 @@
             <span class="nav-badge" id="pill-count-all">0</span>
           </span>
           <span class="filter-pill" data-type="lifecycle" data-val="decided" style="border-left: 3px solid var(--color-decided);">
-            <span style="color: var(--color-decided); font-weight: 700;">🟢 已决策（定案红线）</span>
+            <span style="color: var(--color-decided); font-weight: 700;">🟢 已决策</span>
             <span class="nav-badge" id="pill-count-decided">0</span>
           </span>
           <span class="filter-pill" data-type="lifecycle" data-val="discussing" style="border-left: 3px solid var(--color-discussing);">
@@ -101,6 +101,8 @@
             <span style="color: var(--color-pending); font-weight: 700;">🔴 待决策（等待拍板）</span>
             <span class="nav-badge" id="pill-count-pending">0</span>
           </span>
+          <span class="filter-pill" data-type="lifecycle" data-val="deferred"><span>⏳ 推迟再议</span><span class="nav-badge" id="pill-count-deferred">0</span></span>
+          <span class="filter-pill" data-type="lifecycle" data-val="superseded"><span>📦 已被替代</span><span class="nav-badge" id="pill-count-superseded">0</span></span>
         </div>
       </div>
 
@@ -114,9 +116,8 @@
           <span class="filter-pill" data-type="outcome" data-val="accepted" style="border-left: 3px solid #10b981;">
             <span>🟢 已采纳</span>
           </span>
-          <span class="filter-pill" data-type="outcome" data-val="deferred"><span>⏳ 推迟再议</span></span>
+          <span class="filter-pill" data-type="outcome" data-val=""><span>尚无结论</span></span>
           <span class="filter-pill" data-type="outcome" data-val="partially_accepted"><span>◐ 部分同意</span></span>
-          <span class="filter-pill" data-type="outcome" data-val="superseded"><span>📦 已被替代</span></span>
           <span class="filter-pill" data-type="outcome" data-val="rejected" style="border-left: 3px solid #ef4444;">
             <span>❌ 明确否决方案</span>
             <span class="nav-badge" id="pill-count-rejected" style="background: var(--color-pending-light); color: var(--color-pending);">0</span>
@@ -241,24 +242,30 @@
 
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
           <div class="form-group">
-            <label class="form-label">工作流状态 (Workflow)：</label>
-            <select class="form-select" id="form-workflow-state">
-              <option value="decided">🟢 已决策（定案红线，双方拍板）</option>
+            <label class="form-label">议题进展（何时继续）：</label>
+            <select class="form-select" id="form-workflow-state" onchange="window.dashboardApp.onOutcomeChanged()">
+              <option value="decided">🟢 已决策</option>
               <option value="discussing">🟡 待讨论（技术细节、参数推敲）</option>
               <option value="pending">🔴 待决策（等待拍板决断）</option>
+              <option value="deferred">⏳ 推迟再议（按原话中的条件继续）</option>
+              <option value="superseded">📦 已被新议题替代</option>
             </select>
           </div>
           <div class="form-group">
-            <label class="form-label">决策结论 (Outcome)：</label>
+            <label class="form-label">决策结论（是否同意）：</label>
             <select class="form-select" id="form-decision-outcome" onchange="window.dashboardApp.onOutcomeChanged()">
               <option value="">尚无结论</option>
               <option value="accepted">🟢 采纳接受 (Accepted)</option>
               <option value="partially_accepted">◐ 部分同意（在原话中说明范围）</option>
               <option value="rejected">❌ 明确否决方案 (Rejected)</option>
-              <option value="deferred">⏳ 推迟再议 (Deferred)</option>
-              <option value="superseded">📦 已被新方案替代 (Superseded)</option>
             </select>
           </div>
+        </div>
+
+        <p class="form-label">同意“条件满足后再议”时，可同时选择“采纳接受”和“推迟再议”，在原话中保留约定的条件；这不表示立即实施。</p>
+        <div class="form-group" id="group-superseded-by" style="display: none;">
+          <label class="form-label" for="form-superseded-by">替代议题 ID（可选，保留原议题结论供追溯）：</label>
+          <input class="form-input" id="form-superseded-by" placeholder="例如 adr-new-plan">
         </div>
 
         <!-- 否决原因（仅在 outcome === rejected 时突出显示） -->
