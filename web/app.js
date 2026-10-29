@@ -5,8 +5,8 @@
   "use strict";
 
   const appearanceStorageKey = "agent-decisions-dashboard.appearance";
-  const appearance = { mode: "light", accent: "pink" };
-  const accentNames = ["pink", "blue", "violet", "teal", "amber"];
+  const appearance = { mode: "dark", accent: "blue" };
+  const accentNames = ["blue"];
   try {
     // Preserve the workspace board's previous light/dark preference when present.
     const legacyMode = localStorage.getItem("madoka_theme");
@@ -26,7 +26,7 @@
       const label = appearance.mode === "dark" ? "切换为浅色模式" : "切换为深色模式";
       toggle.title = label;
       toggle.setAttribute("aria-label", label);
-      toggle.textContent = appearance.mode === "dark" ? "☀️" : "🌙";
+      toggle.textContent = appearance.mode === "dark" ? "浅色" : "深色";
     }
     if (persist) {
       try { localStorage.setItem(appearanceStorageKey, JSON.stringify(appearance)); }
@@ -85,11 +85,9 @@
     const safeType = ["success", "warning", "error"].includes(type) ? type : "error";
     const toast = document.createElement("div");
     toast.className = `toast ${safeType}`;
-    const icon = document.createElement("span");
-    icon.textContent = safeType === "success" ? "✅" : safeType === "warning" ? "⚠️" : "❌";
     const text = document.createElement("span");
     text.textContent = String(message ?? "");
-    toast.append(icon, text);
+    toast.append(text);
     if (action && action.text) {
       const actionBtn = document.createElement("button");
       actionBtn.className = "btn btn-secondary";
@@ -237,13 +235,13 @@
         const opt = document.querySelector(`#form-workflow-state option[value="${s.id}"]`);
         if (opt) {
           const label = s.name || s.id;
-          opt.innerText = (s.badge && !s.badge.includes(label)) ? `${s.badge} ${label}` : (s.badge || label);
+          opt.innerText = (s.badge && !s.badge.includes(label)) ? `${statusLabel(s.badge)} ${label}` : (statusLabel(s.badge) || label);
         }
         const pill = document.querySelector(`[data-type="lifecycle"][data-val="${s.id}"]`);
         if (pill) {
           const span = pill.querySelector("span:first-child");
           if (span) {
-            span.innerText = s.badge || s.name || s.id;
+            span.innerText = statusLabel(s.badge || s.name || s.id);
           }
         }
       });
@@ -333,22 +331,24 @@
       rounds: [
         {
           title: "第 1 轮讨论与定案",
-          content: `- **💡 用户意见**：${meta ? meta.last_user_opinion || "—" : "—"}\n- **🤖 团队答复**：${meta ? meta.last_agent_reply || "—" : "—"}`
+          content: `- ** 用户意见**：${meta ? meta.last_user_opinion || "—" : "—"}\n- ** 团队答复**：${meta ? meta.last_agent_reply || "—" : "—"}`
         }
       ]
     };
   }
 
+  const statusLabel = value => String(value || "").replace(/[\p{Extended_Pictographic}\uFE0F]/gu, "").trim();
+
   function getLifecycleBadge(lc) {
     if (state.config.lifecycle_states) {
       const found = state.config.lifecycle_states.find((s) => s.id === lc);
-      if (found) return found;
+      if (found) return { ...found, badge: statusLabel(found.badge || found.name || found.id) };
     }
-    if (lc === "decided") return { badge: "🟢 已决策", badge_class: "badge-decided" };
-    if (lc === "pending") return { badge: "🔴 待决策", badge_class: "badge-pending" };
+    if (lc === "decided") return { badge: " 已决策", badge_class: "badge-decided" };
+    if (lc === "pending") return { badge: " 待决策", badge_class: "badge-pending" };
     if (lc === "deferred") return { badge: "⏳ 推迟再议", badge_class: "badge-discussing" };
-    if (lc === "superseded") return { badge: "📦 已被替代", badge_class: "badge-superseded" };
-    return { badge: "🟡 待讨论", badge_class: "badge-discussing" };
+    if (lc === "superseded") return { badge: " 已被替代", badge_class: "badge-superseded" };
+    return { badge: " 待讨论", badge_class: "badge-discussing" };
   }
 
   function renderMarkdown(text) {
@@ -423,9 +423,9 @@
       updateExpandButton();
       container.innerHTML = `
         <div style="grid-column: 1/-1; text-align: center; padding: 4rem 1rem; color: var(--text-dim);">
-          <div style="font-size: 2.5rem; margin-bottom: 0.8rem;">🔍</div>
+          <div style="font-size: 32px; margin-bottom: 0.8rem;"></div>
           <h3>${state.topicsMeta.length ? "未找到匹配的议题" : "还没有议题"}</h3>
-          <p style="margin-top: 0.4rem; font-size: 0.85rem;">${state.topicsMeta.length ? "请尝试调整筛选条件或搜索关键词" : "点击右上角“新建议题”开始记录。"}</p>
+          <p style="margin-top: 0.4rem; font-size: 14px;">${state.topicsMeta.length ? "请尝试调整筛选条件或搜索关键词" : "点击右上角“新建议题”开始记录。"}</p>
           <button class="btn btn-secondary" style="margin-top: 1rem;" data-action="reset">重置所有筛选</button>
         </div>
       `;
@@ -448,9 +448,9 @@
         // Implementation Badge
         let implBadge = '<span class="badge badge-superseded">实现：未开始</span>';
         if (implState === "verified") {
-          implBadge = `<span class="badge badge-verified" title="记录为已核验，证据由提交者提供">🧪 已核验</span>`;
+          implBadge = `<span class="badge badge-verified" title="记录为已核验，证据由提交者提供"> 已核验</span>`;
         } else if (implState === "implemented") {
-          implBadge = `<span class="badge badge-decided" title="提交者记录为已实现">🔨 已实现</span>`;
+          implBadge = `<span class="badge badge-decided" title="提交者记录为已实现"> 已实现</span>`;
         } else if (implState === "in_progress") {
           implBadge = `<span class="badge badge-in-progress" title="正在开发中">⏳ 进行中</span>`;
         }
@@ -464,8 +464,8 @@
           const rejectionLabel = wf === "superseded" ? "历史否决记录" : wf === "deferred" ? "暂缓议题的否决记录" : "明确否决红线";
           rejectionHtml = `
             <div class="rejection-box">
-              <strong>❌ ${rejectionLabel}：</strong> ${escapeHtml(t.rejection_reason || "用户或团队已明确否决此方案")}
-              ${replacement && wf !== "superseded" ? `<div style="font-size: 0.75rem; margin-top: 0.2rem; color: var(--text-dim);">替代议题：${replacementHtml}</div>` : ""}
+              <strong> ${rejectionLabel}：</strong> ${escapeHtml(t.rejection_reason || "用户或团队已明确否决此方案")}
+              ${replacement && wf !== "superseded" ? `<div style="font-size: 12px; margin-top: 0.2rem; color: var(--text-dim);">替代议题：${replacementHtml}</div>` : ""}
             </div>
           `;
         }
@@ -474,9 +474,9 @@
         <div class="topic-card" id="card-${escapeHtml(t.id)}">
           <div class="card-meta-line">
             <span class="badge ${escapeHtml(lcInfo.badge_class)}">${escapeHtml(lcInfo.badge)}</span>
-            ${getCanonicalOutcome(t) === "accepted" ? '<span class="badge badge-decided">✓ 已同意</span>' : ""}
+            ${getCanonicalOutcome(t) === "accepted" ? '<span class="badge badge-decided"> 已同意</span>' : ""}
             ${getCanonicalOutcome(t) === "" ? '<span class="badge badge-superseded">尚无结论</span>' : ""}
-            ${isRejected ? `<span class="badge badge-rejected">❌ 方案已否决</span>` : ""}
+            ${isRejected ? `<span class="badge badge-rejected"> 方案已否决</span>` : ""}
             ${getCanonicalOutcome(t) === "partially_accepted" ? '<span class="badge badge-partial">◐ 部分同意</span>' : ""}
             ${implBadge}
             <span class="chip">#${escapeHtml(t.id)}</span>
@@ -487,7 +487,7 @@
           </div>
 
           <h3 class="card-title" data-action="toggle" data-topic-id="${escapeHtml(t.id)}">${escapeHtml(t.title)}</h3>
-          
+
           <div class="card-summary">
             ${/^\s*(`{3,}|~{3,})/.test(t.summary || "")
               ? "正文以图表或代码开头，展开详情查看。"
@@ -496,7 +496,7 @@
 
           ${rejectionHtml}
           ${wf === "deferred" ? '<p class="form-label">⏳ 按原话中的时间或条件继续；同意此安排不代表立即实施。</p>' : ""}
-          ${wf === "superseded" ? `<p class="form-label">📦 原结论仅供追溯。${replacement ? `替代议题：${replacementHtml}` : "可在记录决策中填写替代议题。"}</p>` : ""}
+          ${wf === "superseded" ? `<p class="form-label"> 原结论仅供追溯。${replacement ? `替代议题：${replacementHtml}` : "可在记录决策中填写替代议题。"}</p>` : ""}
 
           <!-- Dynamic Markdown body -->
           <div id="detail-body-${escapeHtml(t.id)}" style="display: none; border-top: 1px dashed var(--border-subtle); padding-top: 0.8rem;"></div>
@@ -504,19 +504,19 @@
           <!-- Latest Discussion -->
           <div class="discussion-box">
             <div class="discussion-title">
-              <span>💬 最新决策记录（第 ${escapeHtml(rounds)} 轮）</span>
-              ${rounds && state.capabilities.edit_latest_round ? `<button class="btn btn-secondary" style="font-size: 0.72rem; padding: 0.2rem 0.5rem;" data-action="amend" data-topic-id="${escapeHtml(t.id)}">✏️ 修改本轮</button>` : ""}
+              <span> 最新决策记录（第 ${escapeHtml(rounds)} 轮）</span>
+              ${rounds && state.capabilities.edit_latest_round ? `<button class="btn btn-secondary" style="font-size: 12px; padding: 0.2rem 0.5rem;" data-action="amend" data-topic-id="${escapeHtml(t.id)}"> 修改本轮</button>` : ""}
             </div>
             <div class="discussion-row">
-              <div class="discussion-label">💡 用户意见：</div>
+              <div class="discussion-label"> 用户意见：</div>
               <div style="color: var(--text-main);">${renderMarkdown((t.latest_round_user_opinion ?? t.last_user_opinion) || "暂无原话记录")}</div>
             </div>
             <div class="discussion-row">
-              <div class="discussion-label">🤖 落实答复：</div>
+              <div class="discussion-label"> 落实答复：</div>
               <div style="color: var(--text-main);">${renderMarkdown((t.latest_round_agent_reply ?? t.last_agent_reply) || "—")}</div>
             </div>
             ${t.impl_commit ? `
-              <div class="discussion-row" style="font-size: 0.75rem; color: var(--text-dim); border-top: 1px dashed var(--border-subtle); padding-top: 0.3rem;">
+              <div class="discussion-row" style="font-size: 12px; color: var(--text-dim); border-top: 1px dashed var(--border-subtle); padding-top: 0.3rem;">
                 <span>实现提交引用：</span><code>${escapeHtml(t.impl_commit)}</code>
                 ${t.impl_verifier ? `<span> · 核验人: ${escapeHtml(t.impl_verifier)}</span>` : ""}
               </div>
@@ -524,13 +524,13 @@
           </div>
 
           <div class="card-footer">
-            <span style="font-size: 0.72rem; color: var(--text-muted);">decisions/${escapeHtml(t.id)}.md</span>
+            <span style="font-size: 12px; color: var(--text-muted);">decisions/${escapeHtml(t.id)}.md</span>
             <div style="display: flex; gap: 0.4rem;">
-              <button class="btn btn-secondary" data-action="copy" data-topic-id="${escapeHtml(t.id)}">🔗 引用</button>
+              <button class="btn btn-secondary" data-action="copy" data-topic-id="${escapeHtml(t.id)}"> 引用</button>
               <button class="btn btn-secondary" data-action="toggle" data-topic-id="${escapeHtml(t.id)}">
                 <span id="expand-btn-${escapeHtml(t.id)}">展开详情</span>
               </button>
-              <button class="btn btn-primary" data-action="edit" data-topic-id="${escapeHtml(t.id)}">✏️ 记录决策</button>
+              <button class="btn btn-primary" data-action="edit" data-topic-id="${escapeHtml(t.id)}"> 记录决策</button>
             </div>
           </div>
         </div>
@@ -608,20 +608,20 @@
     (detail.rounds || []).forEach((r) => {
       roundsHtml += `
         <div style="margin-top: 0.8rem; background: var(--bg-card); border-left: 3px solid var(--color-primary); padding: 0.6rem 0.8rem; border-radius: var(--radius-sm);">
-          <div style="font-weight: 700; font-size: 0.82rem; margin-bottom: 0.3rem; color: var(--text-main);">${escapeHtml(r.title)}</div>
-          <div style="font-size: 0.82rem; line-height: 1.5; color: var(--text-dim);">${renderMarkdown(r.content)}</div>
+          <div style="font-weight: 700; font-size: 14px; margin-bottom: 0.3rem; color: var(--text-main);">${escapeHtml(r.title)}</div>
+          <div style="font-size: 14px; line-height: 1.5; color: var(--text-dim);">${renderMarkdown(r.content)}</div>
         </div>
       `;
     });
 
     bodyEl.innerHTML = `
       <div style="margin-bottom: 1rem;">
-        <h4 style="font-size: 0.85rem; color: var(--color-primary); margin-bottom: 0.4rem;">📖 核心论述与现实依据</h4>
-        <div style="font-size: 0.85rem; line-height: 1.6; color: var(--text-main);">${renderMarkdown(detail.core_content || "暂无核心正文")}</div>
+        <h4 style="font-size: 14px; color: var(--color-primary); margin-bottom: 0.4rem;"> 核心论述与现实依据</h4>
+        <div style="font-size: 14px; line-height: 1.6; color: var(--text-main);">${renderMarkdown(detail.core_content || "暂无核心正文")}</div>
       </div>
       <div>
-        <h4 style="font-size: 0.85rem; color: var(--color-primary); margin-bottom: 0.4rem;">📜 历史多轮决策演进 (${(detail.rounds || []).length} 轮)</h4>
-        ${roundsHtml || '<div style="color: var(--text-muted); font-size: 0.8rem;">暂无既往轮次</div>'}
+        <h4 style="font-size: 14px; color: var(--color-primary); margin-bottom: 0.4rem;"> 历史多轮决策演进 (${(detail.rounds || []).length} 轮)</h4>
+        ${roundsHtml || '<div style="color: var(--text-muted); font-size: 12px;">暂无既往轮次</div>'}
       </div>
     `;
   }
@@ -649,7 +649,7 @@
       const el = document.getElementById(`pill-count-${workflow}`);
       if (el) el.innerText = count;
     }
-    
+
     const rejEl = document.getElementById("pill-count-rejected");
     if (rejEl) rejEl.innerText = rejected;
     document.querySelectorAll("[data-obj-badge]").forEach((badge) => {
@@ -670,9 +670,9 @@
     }
     container.innerHTML = state.settledDecisions.map(item => `
       <div class="card" style="margin-bottom: 1rem; padding: 1rem; border: 1px solid var(--border-color); border-radius: 6px;">
-        <h4 style="margin: 0 0 0.5rem 0; font-size: 1.05rem;">${escapeHtml(item.outcome_label || "已决策")} · ${escapeHtml(item.title || "")}</h4>
-        <div style="font-size: 0.95rem; margin-bottom: 0.5rem;"><strong>论述摘要：</strong>${escapeHtml(item.requirement || "")}</div>
-        <div style="font-size: 0.85rem; color: var(--text-dim);"><strong>决策说明：</strong>${escapeHtml(item.details || "")}</div>
+        <h4 style="margin: 0 0 0.5rem 0; font-size: 16px;">${escapeHtml(item.outcome_label || "已决策")} · ${escapeHtml(item.title || "")}</h4>
+        <div style="font-size: 16px; margin-bottom: 0.5rem;"><strong>论述摘要：</strong>${escapeHtml(item.requirement || "")}</div>
+        <div style="font-size: 14px; color: var(--text-dim);"><strong>决策说明：</strong>${escapeHtml(item.details || "")}</div>
         ${item.topic_ref ? `<button class="btn btn-secondary" data-overview-topic="${escapeHtml(item.topic_ref)}">查看完整议题</button>` : ""}
       </div>
     `).join("");
@@ -687,9 +687,9 @@
     }
     container.innerHTML = state.openQuestions.map(item => `
       <div class="card" style="margin-bottom: 1rem; padding: 1rem; border: 1px solid var(--border-color); border-radius: 6px;">
-        <h4 style="margin: 0 0 0.5rem 0; font-size: 1.05rem;">❓ ${escapeHtml(item.item || "")}</h4>
-        <div style="font-size: 0.95rem; margin-bottom: 0.5rem;"><strong>待决难点：</strong>${escapeHtml(item.issue || "")}</div>
-        <div style="font-size: 0.85rem; color: var(--text-dim);"><strong>攻坚聚焦点：</strong>${escapeHtml(item.focus || "")}${item.topic_ref ? ` (关联议题: #${escapeHtml(item.topic_ref)})` : ""}</div>
+        <h4 style="margin: 0 0 0.5rem 0; font-size: 16px;"> ${escapeHtml(item.item || "")}</h4>
+        <div style="font-size: 16px; margin-bottom: 0.5rem;"><strong>待决难点：</strong>${escapeHtml(item.issue || "")}</div>
+        <div style="font-size: 14px; color: var(--text-dim);"><strong>攻坚聚焦点：</strong>${escapeHtml(item.focus || "")}${item.topic_ref ? ` (关联议题: #${escapeHtml(item.topic_ref)})` : ""}</div>
         ${item.topic_ref ? `<button class="btn btn-secondary" data-overview-topic="${escapeHtml(item.topic_ref)}">查看完整议题</button>` : ""}
       </div>
     `).join("");
@@ -704,12 +704,12 @@
     }
     container.innerHTML = state.changelog.map(item => `
       <div class="card" style="margin-bottom: 0.75rem; padding: 0.75rem 1rem; border: 1px solid var(--border-color); border-radius: 6px;">
-        <div style="display: flex; justify-content: space-between; font-size: 0.85rem; color: var(--text-dim); margin-bottom: 0.25rem;">
+        <div style="display: flex; justify-content: space-between; font-size: 14px; color: var(--text-dim); margin-bottom: 0.25rem;">
           <span><strong>范围：</strong>${escapeHtml(item.scope || "")}</span>
           <span>${escapeHtml(item.date || "")}</span>
         </div>
-        <div style="font-size: 0.95rem; margin-bottom: 0.25rem;"><strong>变更：</strong>${escapeHtml(item.change || "")}</div>
-        <div style="font-size: 0.85rem; color: var(--text-dim);"><strong>依据：</strong>${escapeHtml(item.basis || "")}</div>
+        <div style="font-size: 16px; margin-bottom: 0.25rem;"><strong>变更：</strong>${escapeHtml(item.change || "")}</div>
+        <div style="font-size: 14px; color: var(--text-dim);"><strong>依据：</strong>${escapeHtml(item.basis || "")}</div>
       </div>
     `).join("");
   }
@@ -812,7 +812,7 @@
         titleEl.setAttribute("data-default-title", titleEl.textContent.trim());
       }
       const defaultTitle = titleEl.getAttribute("data-default-title");
-      if (defaultTitle && defaultTitle !== "✏️ 确定决策并提交 Git") {
+      if (defaultTitle && defaultTitle !== " 确定决策并提交 Git") {
         titleEl.textContent = `${defaultTitle}: ${meta.title}`;
       } else if (isEn) {
         titleEl.textContent = `Record decision: ${meta.title}`;
@@ -941,7 +941,7 @@
     const banner = bannerFor(session);
     if (!banner) return;
     banner.append(
-      makeTextElement("strong", "⚠️ 尚未确认保存结果"),
+      makeTextElement("strong", " 尚未确认保存结果"),
       makeTextElement("p", `${message} 服务端可能已完成部分或全部写入。草稿和原请求 ID 已保留；下方按钮只会重放原请求，不会生成新的业务请求。请勿通过刷新页面后另行提交来重试。`)
     );
   }
@@ -959,7 +959,7 @@
     const banner = bannerFor(session);
     if (!banner || !session.conflict) return;
     banner.append(
-      makeTextElement("strong", "⚠️ 检测到版本冲突，已暂停提交"),
+      makeTextElement("strong", " 检测到版本冲突，已暂停提交"),
       makeTextElement("p", `编辑基于 v${session.base.version}；服务端报告 v${session.conflict.currentVersion ?? "未知"}。本地草稿已保留，版本号不会自动跳过冲突。请加载最新元数据并逐项核对。`)
     );
     const button = makeTextElement("button", "加载最新版本并核对草稿");
@@ -1039,7 +1039,7 @@
     const wrapper = document.createElement("div");
     wrapper.style.cssText = "overflow:auto;max-height:340px;margin:0.6rem 0";
     const table = document.createElement("table");
-    table.style.cssText = "width:100%;font-size:0.76rem;border-collapse:collapse;text-align:left";
+    table.style.cssText = "width:100%;font-size: 12px;border-collapse:collapse;text-align:left";
     const header = document.createElement("tr");
     for (const label of ["字段", "打开时", "服务端最新", "本地草稿 / 选择"]) header.appendChild(makeTextElement("th", label));
     table.appendChild(header);
@@ -1313,11 +1313,11 @@
   }
 
   const REVIEW_WORKFLOW_OPTIONS = [
-    ["decided", "🟢 已决策"], ["discussing", "🟡 待讨论"], ["pending", "🔴 待决策"],
-    ["deferred", "⏳ 推迟再议"], ["superseded", "📦 已被替代"],
+    ["decided", " 已决策"], ["discussing", " 待讨论"], ["pending", " 待决策"],
+    ["deferred", "⏳ 推迟再议"], ["superseded", " 已被替代"],
   ];
   const REVIEW_OUTCOME_OPTIONS = [
-    ["", "尚无结论"], ["accepted", "🟢 已同意"], ["partially_accepted", "◐ 部分同意"], ["rejected", "❌ 已否决"],
+    ["", "尚无结论"], ["accepted", " 已同意"], ["partially_accepted", "◐ 部分同意"], ["rejected", " 已否决"],
   ];
   const REVIEW_IMPLEMENTATION_OPTIONS = [
     ["not_started", "未开始"], ["in_progress", "进行中"], ["implemented", "已实现"], ["verified", "已核验"],
@@ -1394,18 +1394,18 @@
     const rounds = Array.isArray(detail?.rounds) ? detail.rounds : [];
     const roundsHtml = rounds.map((round) => `
       <div class="review-round">
-        <div style="font-weight: 700; font-size: 0.82rem; margin-bottom: 0.3rem; color: var(--text-main);">${escapeHtml(round.title || "讨论轮次")}</div>
-        <div style="font-size: 0.82rem; line-height: 1.5; color: var(--text-main);">${renderMarkdown(round.content || "")}</div>
+        <div style="font-weight: 700; font-size: 14px; margin-bottom: 0.3rem; color: var(--text-main);">${escapeHtml(round.title || "讨论轮次")}</div>
+        <div style="font-size: 14px; line-height: 1.5; color: var(--text-main);">${renderMarkdown(round.content || "")}</div>
       </div>
     `).join("");
     return `
       <div>
-        <h4>📖 核心论述与现实依据</h4>
+        <h4> 核心论述与现实依据</h4>
         <div class="markdown-body">${renderMarkdown(detail?.core_content || "暂无核心正文")}</div>
       </div>
       <div>
-        <h4>📜 历史多轮决策演进（${rounds.length} 轮）</h4>
-        ${roundsHtml || '<div style="color: var(--text-muted); font-size: 0.8rem;">暂无既往轮次</div>'}
+        <h4> 历史多轮决策演进（${rounds.length} 轮）</h4>
+        ${roundsHtml || '<div style="color: var(--text-muted); font-size: 12px;">暂无既往轮次</div>'}
       </div>
     `;
   }
@@ -1699,7 +1699,7 @@
     if (!textarea || !textarea.value) return;
     try {
       await writeClipboard(textarea.value);
-      showToast("📋 已复制 Agent 上下文 Markdown。");
+      showToast(" 已复制 Agent 上下文 Markdown。");
       closeModal("modal-agent-context");
     } catch (error) {
       showToast(error.message, "error");
@@ -1735,25 +1735,25 @@
           : (!r.topic_id || r.topic_id === state.selectedTopicId);
         revsHtml += `
           <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.6rem 0.8rem; margin-bottom: 0.6rem;">
-            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.75rem; margin-bottom: 0.3rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 12px; margin-bottom: 0.3rem;">
               <span class="chip" style="font-family: var(--font-mono);">${escapeHtml(r.rev_hash)}</span>
               <div style="display: flex; gap: 0.3rem;">
                 ${state.selectedTopicId ? (hasTopicInSnapshot ? `
-                  <button class="btn btn-secondary" style="font-size: 0.7rem; padding: 0.15rem 0.4rem; color: var(--color-primary);" data-history-action="restore" data-topic-id="${escapeHtml(state.selectedTopicId)}" data-revision-id="${escapeHtml(r.rev_id)}">
+                  <button class="btn btn-secondary" style="font-size: 12px; padding: 0.15rem 0.4rem; color: var(--color-primary);" data-history-action="restore" data-topic-id="${escapeHtml(state.selectedTopicId)}" data-revision-id="${escapeHtml(r.rev_id)}">
                     ⏪ 仅回滚当前议题
                   </button>
                 ` : `
-                  <button class="btn btn-secondary" style="font-size: 0.7rem; padding: 0.15rem 0.4rem; color: var(--color-discussing);" data-history-action="restore" data-topic-id="${escapeHtml(state.selectedTopicId)}" data-revision-id="${escapeHtml(r.rev_id)}">
+                  <button class="btn btn-secondary" style="font-size: 12px; padding: 0.15rem 0.4rem; color: var(--color-discussing);" data-history-action="restore" data-topic-id="${escapeHtml(state.selectedTopicId)}" data-revision-id="${escapeHtml(r.rev_id)}">
                     ⏪ 撤销创建（未包含该议题）
                   </button>
                 `) : ""}
-                <button class="btn btn-secondary" style="font-size: 0.7rem; padding: 0.15rem 0.4rem; color: var(--color-pending);" data-history-action="rollback" data-revision-id="${escapeHtml(r.rev_id)}">
-                  ⚠️ 全库快照重置
+                <button class="btn btn-secondary" style="font-size: 12px; padding: 0.15rem 0.4rem; color: var(--color-pending);" data-history-action="rollback" data-revision-id="${escapeHtml(r.rev_id)}">
+                   全库快照重置
                 </button>
               </div>
             </div>
-            <div style="font-size: 0.82rem; font-weight: 600;">${escapeHtml(r.summary)}</div>
-            ${r.diff_summary ? `<div style="font-size: 0.72rem; color: var(--text-dim); margin-top: 0.2rem;">${escapeHtml(r.diff_summary)}</div>` : ""}
+            <div style="font-size: 14px; font-weight: 600;">${escapeHtml(r.summary)}</div>
+            ${r.diff_summary ? `<div style="font-size: 12px; color: var(--text-dim); margin-top: 0.2rem;">${escapeHtml(r.diff_summary)}</div>` : ""}
           </div>
         `;
       });
@@ -1761,7 +1761,7 @@
       const nextOffset = offset + revisions.length;
       const loadMoreHtml = revisions.length >= 100 ? `
         <div id="history-load-more-container" style="text-align: center; margin: 1rem 0;">
-          <button class="btn btn-secondary" data-history-action="load-more" data-offset="${nextOffset}" style="width: 100%; font-size: 0.8rem; padding: 0.4rem;">
+          <button class="btn btn-secondary" data-history-action="load-more" data-offset="${nextOffset}" style="width: 100%; font-size: 12px; padding: 0.4rem;">
             加载更多历史
           </button>
         </div>
@@ -1781,21 +1781,21 @@
         commits.forEach((c) => {
           commitsHtml += `
             <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.6rem 0.8rem; margin-bottom: 0.6rem;">
-              <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.2rem;">
+              <div style="display: flex; justify-content: space-between; font-size: 12px; color: var(--text-muted); margin-bottom: 0.2rem;">
                 <span style="font-family: var(--font-mono); color: var(--color-primary); font-weight: 700;">${escapeHtml(c.hash)}</span>
                 <span>${escapeHtml(String(c.date || "").split(" ")[0])}</span>
               </div>
-              <div style="font-size: 0.82rem; font-weight: 600;">${escapeHtml(c.message)}</div>
+              <div style="font-size: 14px; font-weight: 600;">${escapeHtml(c.message)}</div>
             </div>
           `;
         });
 
         container.innerHTML = `
-          ${state.selectedTopicId ? `<div style="background: rgba(14,165,233,0.1); border: 1px solid rgba(14,165,233,0.3); border-radius: var(--radius-sm); padding: 0.5rem; font-size: 0.78rem; margin-bottom: 0.8rem;">当前选中议题：<code>#${escapeHtml(state.selectedTopicId)}</code>，可执行单议题精准回溯。</div>` : ""}
-          <h4 style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 0.5rem; text-transform: uppercase;">Git 自动语义提交日志</h4>
-          ${commitsHtml || '<div style="color: var(--text-muted); font-size: 0.8rem;">暂无提交</div>'}
-          <h4 style="font-size: 0.82rem; color: var(--text-muted); margin: 1.2rem 0 0.5rem; text-transform: uppercase;">SQLite 历史快照 (Revisions)</h4>
-          <div id="time-machine-revisions-list">${revsHtml || '<div style="color: var(--text-muted); font-size: 0.8rem;">暂无快照</div>'}</div>
+          ${state.selectedTopicId ? `<div style="background: var(--color-primary-light); border: 0; border-radius: var(--radius-sm); padding: 0.5rem; font-size: 12px; margin-bottom: 0.8rem;">当前选中议题：<code>#${escapeHtml(state.selectedTopicId)}</code>，可执行单议题精准回溯。</div>` : ""}
+          <h4 style="font-size: 14px; color: var(--text-muted); margin-bottom: 0.5rem; text-transform: uppercase;">Git 自动语义提交日志</h4>
+          ${commitsHtml || '<div style="color: var(--text-muted); font-size: 12px;">暂无提交</div>'}
+          <h4 style="font-size: 14px; color: var(--text-muted); margin: 1.2rem 0 0.5rem; text-transform: uppercase;">SQLite 历史快照 (Revisions)</h4>
+          <div id="time-machine-revisions-list">${revsHtml || '<div style="color: var(--text-muted); font-size: 12px;">暂无快照</div>'}</div>
           ${loadMoreHtml}
         `;
       }
@@ -1871,7 +1871,7 @@
         }
         delete state.topicsDetailCache[topicId];
         await loadMetadataList();
-        showToast(`⚠️ 议题 [${topicId}] 回滚响应异常 (快照 undefined)，请重试原请求`, "warning");
+        showToast(` 议题 [${topicId}] 回滚响应异常 (快照 undefined)，请重试原请求`, "warning");
       } else {
         if (res.status < 500) {
           delete state.pendingRestores[restoreKey];
@@ -1901,7 +1901,7 @@
       showToast("请重新打开历史列表后再执行全库恢复", "warning");
       return;
     }
-    if (!confirm(`⚠️ 全库恢复至快照 #${revId}？\n这会恢复所有议题，并归档目标快照之外的议题。请确认已备份当前内容。`)) return;
+    if (!confirm(` 全库恢复至快照 #${revId}？\n这会恢复所有议题，并归档目标快照之外的议题。请确认已备份当前内容。`)) return;
     try {
       const res = await fetch("/api/rollback", {
         method: "POST",
