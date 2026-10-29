@@ -41,3 +41,20 @@
 - 有代码变更后运行相关回归；完成一轮修复后运行 `python -m unittest discover tests`、`node --test tests/*.test.js`、`node --check web/app.js` 和 `git diff --check`。页面交互有改动时用浏览器检查，覆盖新建、追加、更正、筛选与保存后的定位；测试跳过、未验证平台和剩余边界应明确报告。
 - 用户未要求时，不提交、推送或安装全局钩子。自动 Git 提交是看板处理用户记录的可配置功能，不代表 Agent 获得任意工程提交权限。
 - Agent 参与的工程提交按实际参与者添加 `Co-authored-by` 尾注；Codex 使用 `Co-authored-by: Codex <noreply@openai.com>`。保留环境已有的提交作者与签名身份，提交、推送前核对尾注。`git_commit.co_author` 仅影响看板自动提交，不会为手工执行的 `git commit` 自动补署名。
+
+
+## Repo docs
+
+The living guide is [repo-docs/README.md](repo-docs/README.md); start with the [main walkthrough](repo-docs/walkthroughs/one-real-run.md), then use the [code map](repo-docs/code-map.md) to locate changes.
+This repo's `repo-docs/` guide is reader-facing Chinese documentation. When updating reader-facing guide pages, use `repo-docs-zh` when available; keep Chinese reader handles in the prose and preserve exact source identifiers for lookup.
+Read current source, scripts, configuration and tests before relying on guide claims. Repo questions, behavior-changing edits, user uncertainty, stable knowledge clarified in conversation and knowledge about to enter memory trigger the `repo-docs` Sync gate before the final response (or the same manual check if the skill is unavailable).
+Choose `none`, `answer-only`, `foreground patch`, or `background sync`. Patch the smallest owning page before answering when stale content would mislead; delegate broader non-critical sync only with a real tracked handoff. Record meaningful guide changes and validation limits in `repo-docs/change-log.md`, with `Synced through <sha>` when HEAD exists. Do not log every answer.
+
+
+## 贡献与维护入口
+
+提交采用 Conventional Commits：`type(scope): 描述`；项目已有的中文描述、署名、签名和文档交代要求继续生效。保留用户未提交内容，只暂存本次明确审查的路径。
+贡献与安全约定分别见 [贡献说明](CONTRIBUTING.md) 和 [安全说明](SECURITY.md)；相关维护由统一任务协调，避免并行覆盖。
+维护守卫安装命令为 `python tools/repo_maintenance_guard.py install`。仅在明确安装任务下执行；文档修改不自动安装或更改 Git 配置。保留已有安全钩子，安装与验证结果按实际执行另行记录。
+
+文档站统一使用 VitePress 默认主题；样式与动效遵循原生主题，构建输出独立于业务界面。

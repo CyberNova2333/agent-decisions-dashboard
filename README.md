@@ -1,5 +1,7 @@
 # Agent Decisions Dashboard ⚖️
 
+[English](README.en.md) · [中文源码指南](repo-docs/README.md)
+
 面向个人与本机 Agent 协作的决策台账：保留讨论原话、记录当前结论、跟踪实现状态，并通过版本历史追溯修改。
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](./LICENSE)
@@ -26,7 +28,7 @@ Python 服务仅使用标准库，界面是静态 HTML/CSS/JavaScript；Mermaid 
 | 保存后定位 | 刷新状态和详情缓存，保持刚保存的议题展开并定位；若不再符合原筛选条件，会提示并清除筛选以显示目标 |
 | Markdown 与图表 | 表格、多行文本、标题、列表、引用、代码围栏、安全链接和本地 Mermaid 渲染 |
 | 历史与恢复 | 查看快照、恢复单议题、撤销创建或恢复全库快照；台账保存与 Git 提交分别反馈 |
-| 外观 | 默认粉白配色；樱粉、蓝、紫、青绿、琥珀五种主题色，独立切换深浅模式；主按钮使用白字 |
+| 外观 | 遵循系列 DESIGN.md 的蓝黑配色，默认深色，可切换浅色模式；主按钮使用浅色文字，Anime.js 本地加载并尊重减少动效设置 |
 | Agent 与维护 | 完整上下文导出、可选只读检查钩子、实现证据登记、一致性检查、索引重建与 SQLite 在线备份 |
 
 ## 快速上手
@@ -401,3 +403,21 @@ Python 回归覆盖保存、恢复、幂等性、并发版本检查、索引一�
 ## 许可证
 
 本项目采用 [GNU GPLv3](./LICENSE)。随附的 Mermaid 资源保留其 [MIT 许可证](./web/vendor/mermaid-LICENSE) 和来源记录。
+
+<!-- repo-docs routing -->
+
+## 源码指南与文档站
+
+把用户原话、Agent 答复和当前结论保存成可追溯的本机台账。一次保存同时涉及 Markdown、SQLite 历史、摘要导出和可选 Git 提交，回执必须逐项核对。
+
+从[阅读路径](repo-docs/README.md)进入[一条真实主流程](repo-docs/walkthroughs/one-real-run.md)，再用[代码地图](repo-docs/code-map.md)定位改动。证据与未覆盖边界见[源码调查记录](repo-docs/references/source-evidence.md)。
+
+## 文档站
+
+文档站采用 VitePress 默认主题，依赖与业务项目分开安装。默认输出 `docs-site/.vitepress/dist/`；独立核验可在构建命令后加 `-- --outDir <仓库外绝对目录>`。指南正文只维护 `repo-docs/`，站点通过 include 读取；网页中的仓库源码链接显示为精确文件路径，不复制源码或本机资源。
+
+```sh
+npm --prefix docs-site ci
+npm --prefix docs-site run docs:dev -- --host 127.0.0.1
+npm --prefix docs-site run docs:build
+```
