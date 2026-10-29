@@ -1,2 +1,8 @@
 # Preserve the upstream distribution byte-for-byte; review its pinned source/hash.
 web/vendor/*.min.js -text -diff -whitespace
+
+# Portable repository maintenance hooks
+tools/repo_maintenance_guard.py text eol=lf
+tools/repo_maintenance_hooks/pre-commit text eol=lf
+tools/repo_maintenance_hooks/commit-msg text eol=lf
+tools/repo_maintenance_hooks/pre-push text eol=lf

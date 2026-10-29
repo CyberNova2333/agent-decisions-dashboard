@@ -36,4 +36,5 @@ dist/
 *.egg-info/
 *.whl
 
+# Local documentation build output
 
