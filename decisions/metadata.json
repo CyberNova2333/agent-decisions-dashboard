@@ -1,0 +1,29 @@
+{
+  "updated_at": "2026-11-07T18:41:38.490576",
+  "total_topics": 1,
+  "topics": [
+    {
+      "id": "234",
+      "title": "34",
+      "file": "decisions/234.md",
+      "section": "未分类",
+      "object": "234",
+      "function": "核心规范",
+      "lifecycle_status": "pending",
+      "workflow_state": "pending",
+      "decision_outcome": "",
+      "rejection_reason": "",
+      "superseded_by": "",
+      "implementation_state": "not_started",
+      "impl_commit": "",
+      "impl_verifier": "",
+      "version": 1,
+      "decision_status": "尚无结论",
+      "impl_status": "not_started",
+      "priority": "普通",
+      "summary": "23",
+      "rounds_count": 1,
+      "updated_at": "2026-11-07T18:41:38.469417"
+    }
+  ]
+}
