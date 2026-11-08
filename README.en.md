@@ -2,7 +2,7 @@
 
 [中文完整说明](README.md) · [Chinese source guide](repo-docs/README.md)
 
-A local decision ledger for human and agent collaboration. It preserves discussion text, separates workflow, decision outcome and implementation state, and retains version history. A Python standard-library service serves static HTML/CSS/JavaScript; no frontend build or npm install is needed to run it.
+A local decision ledger for human and agent collaboration. It preserves discussion text, separates workflow, decision outcome and implementation state, and retains version history. A Python standard-library service serves static HTML/CSS/JavaScript; no frontend build or pnpm install is needed to run it.
 
 ## Run
 
@@ -43,9 +43,9 @@ Node is needed only for frontend checks. UI changes also need browser testing ag
 The [Chinese source guide](repo-docs/README.md) follows one implemented workflow, then links to a code map and evidence audit. It does not claim complete architecture coverage.
 
 ```sh
-npm --prefix docs-site ci
-npm --prefix docs-site run docs:dev -- --host 127.0.0.1
-npm --prefix docs-site run docs:build
+pnpm --dir docs-site install --frozen-lockfile
+pnpm --dir docs-site run docs:dev -- --host 127.0.0.1
+pnpm --dir docs-site run docs:build
 ```
 
 The documentation site uses the default VitePress theme, with dependencies installed separately from the application. Output defaults to `docs-site/.vitepress/dist/`; append `-- --outDir <external-absolute-directory>` for an isolated build. Markdown remains in `repo-docs/` and is included by the site. Repository source links are shown as exact paths; source files and local resources are not published.
