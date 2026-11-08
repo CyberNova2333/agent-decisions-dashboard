@@ -1,44 +1,36 @@
 ---
 layout: home
-repoGuideSource: "repo-docs/README.md"
 
 hero:
-  name: Agent Decisions Dashboard
-  text: 本机决策记录与追溯台账
-  tagline: 把用户原话、Agent 答复与最终结论归档为可审计的本机 SQLite 历史与可验证 Git 提交。
+  name: Agent 决策面板
+  text: 现代技术基础设施
+  tagline: Agent Decisions Dashboard 是一个轻量级、面向多智能体（Multi-Agent）协作编程与复杂研发工程的**本地决策记录与审计台账服务**。
   actions:
     - theme: brand
-      text: 开启文档阅读
-      link: /walkthroughs/one-real-run
+      text: 快速开始阅读
+      link: /docs/
     - theme: alt
-      text: 架构代码地图
-      link: /code-map
+      text: 交互式架构全景
+      link: /docs/architecture
     - theme: alt
       text: GitHub 仓库
       link: https://github.com/CyberNova2333/agent-decisions-dashboard
 
 features:
-  - title: 全链路决策台账
-    details: 将人机多轮对话输入、模型回复、中间决策断言与最终共识同步写入结构化 SQLite 历史与 Markdown 归档。
-  - title: 幂等回执与只读核验
-    details: HTTP 保存请求支持幂等凭证回执，多端审计只读核对，确保记录真实可信、不可篡改。
-  - title: 可选 Git 自动化提交
-    details: 自动协同本地 Git 仓库将重要架构与开发决策落盘签名，杜绝事后凭空臆测历史上下文。
+  - title: 极简快速上手
+    details: 通俗易懂的文档组织结构，分钟级完成环境搭建与快速启动。
+  - title: 严密安全防护
+    details: 零凭据泄漏防护、受控沙箱隔离与细粒度白名单权限控制。
+  - title: 现代化视觉呈现
+    details: 质感模式与简约模式双向自适应，内建 Archify 交互架构图表。
 ---
-
-## 这是什么
-
-**Agent Decisions Dashboard** 是一个运行在本机的决策记录与审计工具。在多 Agent 协同编程或深度研发过程中，它解决的是“复杂对话结论如何长期沉淀为可信依据”的难题。
-
-系统通过本地 HTTP 接口接收 Agent 钩子与外部调用，把用户原始需求、Agent 决策推理与最终代码修改记录结构化存入 SQLite，并同步生成人类友好的 Markdown 纪要与 Git 提交，形成完整的双向验证证据链。
-
 
 ## 架构全景
 
 <div class="archify-diagram-card" style="margin: 1.5rem 0; border: 1px solid var(--vp-c-border); border-radius: 12px; overflow: hidden; background: var(--vp-c-bg-soft); box-shadow: 0 4px 16px rgba(0,0,0,0.06);">
   <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 18px; background: var(--vp-c-bg-elv); border-bottom: 1px solid var(--vp-c-border); font-size: 13px;">
     <span style="font-weight: 600; color: var(--vp-c-text-1); display: flex; align-items: center; gap: 8px;">
-      <span style="font-size: 16px;">📐</span> 决策流转全生命周期（交互式架构图表，支持平移 / 缩放 / 探查）
+      <span style="font-size: 16px;">📐</span> 决策状态流转全生命周期（基于 Archify 的高保真交互图表，支持平移/缩放/探查）
     </span>
     <a href="/diagrams/decision-lifecycle.html" target="_blank" rel="noreferrer" style="font-size: 12px; color: var(--vp-c-brand-1); text-decoration: none; font-weight: 500;">
       在新窗口全屏打开 ↗
@@ -47,22 +39,17 @@ features:
   <iframe src="/diagrams/decision-lifecycle.html" width="100%" height="520px" frameborder="0" style="display: block; border: none;" allowfullscreen loading="lazy"></iframe>
 </div>
 
-## 怎么用 / 快速上手
-
-### 1. 启动本地台账服务
-
-Python 3.9+ 即可直接从源码运行，无第三方运行时依赖：
+## 快速上手演示
 
 ```bash
-# 启动本地决策台账服务（默认监听本地端口）
+# 1. 克隆并进入目录
+git clone https://github.com/CyberNova2333/agent-decisions-dashboard.git
+cd agent-decisions-dashboard
+
+# 2. 启动本地台账服务（默认监听本地端口 8765）
 python -m core.server
-```
 
-### 2. 通过 API 记录决策
-
-向本地服务发送一条决策记录：
-
-```bash
+# 3. 提交一条决策记录
 curl -X POST http://127.0.0.1:8765/api/decisions \
   -H "Content-Type: application/json" \
   -d '{
@@ -73,18 +60,11 @@ curl -X POST http://127.0.0.1:8765/api/decisions \
   }'
 ```
 
-服务将返回包含全局唯一决策 ID 与 SHA-256 校验和的幂等回执。
+## 文档分层导航
 
-## 分层阅读与快速跳转
-
-::: tip 按读者角色快速检索
-- **初次接触 / 快速理解**：从[一条真实主流程](/walkthroughs/one-real-run)读起，顺着一次 HTTP 保存走完入库、Markdown 生成与回执校验全流程。
-- **架构设计 / 模块定位**：从[代码地图](/code-map)进入，按职责查看服务入口、SQLite 存储驱动、Markdown 导出器与测试分布。
-- **审计复核 / 核心贡献**：从[源码证据](/references/source-evidence)核对真实测试断言与实现细节，查阅[阅读质量审计](/references/quality-review)了解当前边界与剩余风险。
+::: tip 按照读者需求快速跳转
+- **初次上手**：直接阅读 [快速入门与实战](/docs/)，走通环境配置与首次执行流程；
+- **架构探查**：查阅 [系统架构与设计](/docs/architecture)，全屏体验交互式拓扑图表；
+- **详细配置**：查阅 [配置与使用指南](/docs/configuration)，查阅所有环境变量与参数；
+- **排查解惑**：查阅 [常见问题与排错](/docs/faq)，快速定位解决使用疑难。
 :::
-
----
-
-## 完整项目指南概览
-
-<!--@include: ../repo-docs/README.md-->
