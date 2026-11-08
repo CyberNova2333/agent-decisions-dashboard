@@ -181,10 +181,10 @@ body[data-theme="dark"] {
   --btn-bg: #21262d;
   --btn-hover-bg: #30363d;
   --btn-border: rgba(240, 246, 252, 0.1);
-  --btn-shadow: 0 0 transparent;
-  --btn-primary-shadow: 0 0 transparent;
-  --shadow-card: 0 0 transparent;
-  --shadow-modal: 0 16px 32px rgba(1, 4, 9, 0.85);
+  --btn-shadow: 0 1px 0 rgba(1, 4, 9, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --btn-primary-shadow: 0 1px 0 rgba(1, 4, 9, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  --shadow-card: 0 1px 3px rgba(1, 4, 9, 0.35), 0 1px 0 rgba(240, 246, 252, 0.05);
+  --shadow-modal: 0 16px 32px rgba(1, 4, 9, 0.85), inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
 
 /* ==========================================================================
@@ -745,13 +745,19 @@ body[data-theme="dark"] .btn-secondary {
   flex-direction: column;
   gap: 12px;
   box-shadow: var(--shadow-card);
-  transition: border-color 120ms var(--ease-out);
+  transition: border-color 120ms var(--ease-out), box-shadow 120ms var(--ease-out), transform 120ms var(--ease-out);
   position: relative;
   min-width: 0;
 }
 
 .topic-card:hover {
   border-color: var(--fg-subtle);
+  box-shadow: 0 4px 12px rgba(31, 35, 40, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  transform: translateY(-1px);
+}
+
+body[data-theme="dark"] .topic-card:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 /* Primer Box-header treatment for the top metadata bar */
@@ -779,6 +785,7 @@ body[data-theme="dark"] .btn-secondary {
   line-height: 18px;
   border: 1px solid transparent;
   white-space: nowrap;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
 }
 
 .badge-decided {
