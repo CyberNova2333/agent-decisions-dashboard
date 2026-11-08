@@ -14,8 +14,6 @@ Python 服务仅使用标准库，界面是静态 HTML/CSS/JavaScript；Mermaid 
 适用范围是本机记录与追溯。不提供账号权限、多人远程协作、任务排期或自动执行 Agent；上下文需要调用者主动读取，导出文档不能保证 Agent 遵守结论。
 
 
-> 📐 **交互式架构图表**：支持动态探查、缩放平移与主题切换的高保真架构图：[决策流转全生命周期图](https://cybernova2333.github.io/agent-decisions-dashboard/diagrams/decision-lifecycle.html)。
-
 ## 当前功能
 
 | 功能 | 当前行为 |
