@@ -5,16 +5,15 @@
   "use strict";
 
   const appearanceStorageKey = "agent-decisions-dashboard.appearance";
-  const appearance = { mode: "dark", accent: "blue" };
+  const systemPrefersDark = () => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
+  const appearance = { mode: systemPrefersDark() ? "dark" : "light", accent: "blue" };
   const accentNames = ["blue"];
-  try {
-    // Preserve the workspace board's previous light/dark preference when present.
-    const legacyMode = localStorage.getItem("madoka_theme");
-    if (["dark", "light"].includes(legacyMode)) appearance.mode = legacyMode;
-    const saved = JSON.parse(localStorage.getItem(appearanceStorageKey));
-    if (saved && ["dark", "light"].includes(saved.mode)) appearance.mode = saved.mode;
-    if (saved && accentNames.includes(saved.accent)) appearance.accent = saved.accent;
-  } catch (_) { /* Storage can be unavailable or contain invalid data. */ }
+  let dnSwitchView = null;
+
+  window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
+    appearance.mode = e.matches ? "dark" : "light";
+    applyAppearance(false);
+  });
 
   function applyAppearance(persist = false) {
     document.body.dataset.theme = appearance.mode;
@@ -28,10 +27,32 @@
       toggle.setAttribute("aria-label", label);
       toggle.textContent = appearance.mode === "dark" ? "浅色" : "深色";
     }
+    if (dnSwitchView) {
+      dnSwitchView.apply(appearance.mode === "dark");
+    }
     if (persist) {
       try { localStorage.setItem(appearanceStorageKey, JSON.stringify(appearance)); }
       catch (_) { /* Keep the selected appearance for this tab when storage is blocked. */ }
     }
+  }
+
+  function initDayNightSwitch() {
+    const container = document.querySelector(".appearance-controls");
+    const toggleBtn = document.getElementById("btn-toggle-theme");
+    if (!container || !window.DayNightSwitch || dnSwitchView) return;
+    if (toggleBtn) toggleBtn.style.display = "none";
+    const host = document.createElement("span");
+    host.className = "day-night-control";
+    host.style.cssText = "display:inline-flex;align-items:center;vertical-align:middle;";
+    container.appendChild(host);
+    dnSwitchView = window.DayNightSwitch.mount(host, {
+      isDark: () => appearance.mode === "dark",
+      onToggle: (nextDark) => {
+        appearance.mode = nextDark ? "dark" : "light";
+        applyAppearance(true);
+      },
+    });
+    dnSwitchView.apply(appearance.mode === "dark");
   }
   // Apply before loading data; changing appearance never re-renders editor drafts.
   applyAppearance();
@@ -225,7 +246,7 @@
     if (cfg.brand_icon) {
       const iconUri = `data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>${encodeURIComponent(cfg.brand_icon)}</text></svg>`;
       const fav = document.getElementById("page-favicon");
-      if (fav) fav.href = iconUri;
+      if (fav) fav.href = "brand-logo.svg";
       const brandIconEl = document.getElementById("brand-icon");
       if (brandIconEl) brandIconEl.innerText = cfg.brand_icon;
     }
@@ -344,11 +365,11 @@
       const found = state.config.lifecycle_states.find((s) => s.id === lc);
       if (found) return { ...found, badge: statusLabel(found.badge || found.name || found.id) };
     }
-    if (lc === "decided") return { badge: " 已决策", badge_class: "badge-decided" };
-    if (lc === "pending") return { badge: " 待决策", badge_class: "badge-pending" };
+    if (lc === "decided") return { badge: "✅ 已决策", badge_class: "badge-decided" };
+    if (lc === "pending") return { badge: "❓ 待决策", badge_class: "badge-pending" };
     if (lc === "deferred") return { badge: "⏳ 推迟再议", badge_class: "badge-discussing" };
     if (lc === "superseded") return { badge: " 已被替代", badge_class: "badge-superseded" };
-    return { badge: " 待讨论", badge_class: "badge-discussing" };
+    return { badge: "💬 待讨论", badge_class: "badge-discussing" };
   }
 
   function renderMarkdown(text) {
@@ -669,11 +690,11 @@
       return;
     }
     container.innerHTML = state.settledDecisions.map(item => `
-      <div class="card" style="margin-bottom: 1rem; padding: 1rem; border: 1px solid var(--border-color); border-radius: 6px;">
-        <h4 style="margin: 0 0 0.5rem 0; font-size: 16px;">${escapeHtml(item.outcome_label || "已决策")} · ${escapeHtml(item.title || "")}</h4>
-        <div style="font-size: 16px; margin-bottom: 0.5rem;"><strong>论述摘要：</strong>${escapeHtml(item.requirement || "")}</div>
-        <div style="font-size: 14px; color: var(--text-dim);"><strong>决策说明：</strong>${escapeHtml(item.details || "")}</div>
-        ${item.topic_ref ? `<button class="btn btn-secondary" data-overview-topic="${escapeHtml(item.topic_ref)}">查看完整议题</button>` : ""}
+      <div class="overview-card">
+        <h4>${escapeHtml(item.outcome_label || "✅ 已决策")} · ${escapeHtml(item.title || "")}</h4>
+        <div style="font-size: 14px; color: var(--text-main);"><strong>论述摘要：</strong>${escapeHtml(item.requirement || "")}</div>
+        <div style="font-size: 13px; color: var(--text-dim);"><strong>决策说明：</strong>${escapeHtml(item.details || "")}</div>
+        ${item.topic_ref ? `<div style="margin-top: 4px;"><button class="btn btn-secondary" data-overview-topic="${escapeHtml(item.topic_ref)}">查看完整议题</button></div>` : ""}
       </div>
     `).join("");
   }
@@ -686,11 +707,11 @@
       return;
     }
     container.innerHTML = state.openQuestions.map(item => `
-      <div class="card" style="margin-bottom: 1rem; padding: 1rem; border: 1px solid var(--border-color); border-radius: 6px;">
-        <h4 style="margin: 0 0 0.5rem 0; font-size: 16px;"> ${escapeHtml(item.item || "")}</h4>
-        <div style="font-size: 16px; margin-bottom: 0.5rem;"><strong>待决难点：</strong>${escapeHtml(item.issue || "")}</div>
-        <div style="font-size: 14px; color: var(--text-dim);"><strong>攻坚聚焦点：</strong>${escapeHtml(item.focus || "")}${item.topic_ref ? ` (关联议题: #${escapeHtml(item.topic_ref)})` : ""}</div>
-        ${item.topic_ref ? `<button class="btn btn-secondary" data-overview-topic="${escapeHtml(item.topic_ref)}">查看完整议题</button>` : ""}
+      <div class="overview-card">
+        <h4>${escapeHtml(item.item || "")}</h4>
+        <div style="font-size: 14px; color: var(--text-main);"><strong>待决难点：</strong>${escapeHtml(item.issue || "")}</div>
+        <div style="font-size: 13px; color: var(--text-dim);"><strong>攻坚聚焦点：</strong>${escapeHtml(item.focus || "")}${item.topic_ref ? ` (关联议题: #${escapeHtml(item.topic_ref)})` : ""}</div>
+        ${item.topic_ref ? `<div style="margin-top: 4px;"><button class="btn btn-secondary" data-overview-topic="${escapeHtml(item.topic_ref)}">查看完整议题</button></div>` : ""}
       </div>
     `).join("");
   }
@@ -703,13 +724,13 @@
       return;
     }
     container.innerHTML = state.changelog.map(item => `
-      <div class="card" style="margin-bottom: 0.75rem; padding: 0.75rem 1rem; border: 1px solid var(--border-color); border-radius: 6px;">
-        <div style="display: flex; justify-content: space-between; font-size: 14px; color: var(--text-dim); margin-bottom: 0.25rem;">
+      <div class="overview-card">
+        <div class="overview-card-meta">
           <span><strong>范围：</strong>${escapeHtml(item.scope || "")}</span>
           <span>${escapeHtml(item.date || "")}</span>
         </div>
-        <div style="font-size: 16px; margin-bottom: 0.25rem;"><strong>变更：</strong>${escapeHtml(item.change || "")}</div>
-        <div style="font-size: 14px; color: var(--text-dim);"><strong>依据：</strong>${escapeHtml(item.basis || "")}</div>
+        <div style="font-size: 14px; color: var(--text-main);"><strong>变更：</strong>${escapeHtml(item.change || "")}</div>
+        <div style="font-size: 13px; color: var(--text-dim);"><strong>依据：</strong>${escapeHtml(item.basis || "")}</div>
       </div>
     `).join("");
   }
@@ -1313,14 +1334,14 @@
   }
 
   const REVIEW_WORKFLOW_OPTIONS = [
-    ["decided", " 已决策"], ["discussing", " 待讨论"], ["pending", " 待决策"],
+    ["decided", "✅ 已决策"], ["discussing", "💬 待讨论"], ["pending", "❓ 待决策"],
     ["deferred", "⏳ 推迟再议"], ["superseded", " 已被替代"],
   ];
   const REVIEW_OUTCOME_OPTIONS = [
     ["", "尚无结论"], ["accepted", " 已同意"], ["partially_accepted", "◐ 部分同意"], ["rejected", " 已否决"],
   ];
   const REVIEW_IMPLEMENTATION_OPTIONS = [
-    ["not_started", "未开始"], ["in_progress", "进行中"], ["implemented", "已实现"], ["verified", "已核验"],
+    ["not_started", "未开始"], ["in_progress", "进行中"], ["implemented", "🎉 已实现"], ["verified", "已核验"],
   ];
 
   function reviewTopics() {
@@ -1999,6 +2020,7 @@
 
   // Initialization
   document.addEventListener("DOMContentLoaded", () => {
+    initDayNightSwitch();
     document.getElementById("btn-toggle-all").addEventListener("click", toggleAllCards);
     document.getElementById("btn-refresh-topics").addEventListener("click", async () => {
       if (!await loadMetadataList()) { showToast("刷新失败，请检查本机服务。", "error"); return; }
@@ -2098,10 +2120,14 @@
     // View toggle buttons
     document.getElementById("btn-view-grid")?.addEventListener("click", () => {
       state.viewMode = "grid";
+      document.getElementById("btn-view-grid")?.classList.add("active");
+      document.getElementById("btn-view-list")?.classList.remove("active");
       renderTopicCards();
     });
     document.getElementById("btn-view-list")?.addEventListener("click", () => {
       state.viewMode = "list";
+      document.getElementById("btn-view-list")?.classList.add("active");
+      document.getElementById("btn-view-grid")?.classList.remove("active");
       renderTopicCards();
     });
 
