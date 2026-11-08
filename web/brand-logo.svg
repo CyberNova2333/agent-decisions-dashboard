@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="决策面板">
+  <defs><linearGradient id="ad" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#3b8fe0"/><stop offset="1" stop-color="#0a4a8a"/></linearGradient></defs>
+  <rect x="2" y="2" width="44" height="44" rx="10" fill="url(#ad)"/>
+  <g stroke="#fff" stroke-width="2.4" stroke-linecap="round" fill="none">
+    <path d="M14 32 L24 22 L24 14"/>
+    <path d="M24 22 L34 14"/>
+    <path d="M24 22 L34 30"/>
+  </g>
+  <circle cx="14" cy="32" r="3.4" fill="#fff"/>
+  <circle cx="24" cy="22" r="3.4" fill="#fff"/>
+  <circle cx="34" cy="14" r="3.4" fill="#fff"/>
+  <circle cx="34" cy="30" r="3.4" fill="#fff"/>
+</svg>

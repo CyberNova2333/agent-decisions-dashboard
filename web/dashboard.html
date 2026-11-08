@@ -3,121 +3,165 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title id="page-title">Agent Decisions Dashboard</title>
-  <link rel="icon" id="page-favicon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'></text></svg>">
+  <title id="page-title">Agent Decisions Dashboard — 架构决策与治理台账</title>
+  <link id="page-favicon" rel="icon" type="image/svg+xml" href="brand-logo.svg">
   <link rel="stylesheet" href="style.css">
 </head>
 <body data-theme="dark" data-accent="blue">
-  <!-- Top Global Navigation -->
+
+  <!-- Toast Notification Container -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <!-- Top Header -->
   <header class="app-header">
-    <div class="brand">
-      <span class="brand-logo" id="brand-logo">AD</span>
-      <div class="brand-text">
-        <h1 id="brand-title">Agent Decisions Dashboard <span id="brand-icon"></span></h1>
-        <div class="brand-subtitle" id="brand-subtitle">本机决策记录、讨论原话与版本追溯</div>
+    <div class="brand-group">
+      <div class="brand-logo" id="brand-logo">AD</div>
+      <div>
+        <div class="brand-title" id="brand-title">
+          <span data-brand-name>Agent Decisions Dashboard</span>
+          <span id="brand-icon" style="font-size: 13px; color: var(--color-discussing); font-family: var(--font-mono); font-weight: 600;">v2.0</span>
+        </div>
+        <div class="brand-subtitle" id="brand-subtitle">通用多轮讨论追踪、版本时光机与 Agent 防漂移上下文</div>
       </div>
     </div>
 
     <div class="header-actions">
-      <!-- Server Status Badge -->
-      <div class="server-status" id="server-status" title="当前数据后端服务状态">
-        <span class="server-dot online" id="server-status-dot"></span>
-        <span id="server-status-text">正在连接本机服务</span>
+      <!-- Global Search -->
+      <div class="search-box">
+        <span class="search-icon" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+        </span>
+        <input type="text" id="search-input" placeholder="搜索议题标题、原话、答复、否决原因...">
       </div>
 
-      <button class="btn btn-primary" id="btn-create-topic" onclick="window.dashboardApp.openCreateModal()" disabled>＋ 新建议题</button>
-      <button class="btn btn-secondary" id="btn-agent-context" onclick="window.dashboardApp.openAgentContextModal()" title="导出只读治理 Prompt Markdown">
-        <span></span>
-        <span>Agent Context</span>
+      <!-- Review Mode -->
+      <button class="btn btn-secondary" id="btn-review-view" type="button" title="进入单页沉浸式阅卷视图">
+        <span class="btn-icon" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>
+        </span>
+        <span>阅卷视图</span>
       </button>
 
-      <button class="btn btn-secondary" id="btn-time-machine" onclick="window.dashboardApp.openTimeMachine()" title="查看 Git 提交记录与快照链">
-        <span></span>
-        <span>时间机器</span>
+      <!-- Agent Context Button -->
+      <button class="btn btn-secondary" onclick="window.dashboardApp.openAgentContextModal()" title="提取 Agent 必读防漂移规范">
+        <span class="btn-icon" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
+        </span>
+        <span>Agent 上下文</span>
       </button>
 
-      <button class="btn-icon" id="btn-toggle-theme" title="切换为浅色模式" aria-label="切换为浅色模式">
-
+      <!-- Time Machine Button -->
+      <button class="btn btn-secondary" onclick="window.dashboardApp.openTimeMachine()" title="查看 Git 提交历史与快照回滚">
+        <span class="btn-icon" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+        </span>
+        <span>版本时光机</span>
       </button>
+
+      <!-- Create Topic Button -->
+      <button class="btn btn-primary" id="btn-create-topic" onclick="window.dashboardApp.openCreateModal()">
+        <span class="btn-icon" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        </span>
+        <span>新建议题</span>
+      </button>
+
+      <!-- Server Online Status -->
+      <div class="server-status" title="本机 Python SQLite + Git 守护进程状态">
+        <span class="server-dot" id="server-status-dot"></span>
+        <span id="server-status-text">检测服务中...</span>
+      </div>
+
+      <!-- Appearance Controls -->
+      <div class="appearance-controls" aria-label="界面外观">
+        <button class="btn btn-secondary" id="btn-toggle-theme" type="button" title="切换深浅模式">浅色</button>
+      </div>
     </div>
   </header>
 
-  <!-- App Main Layout -->
-  <div class="app-container">
-    <!-- Left Sidebar -->
-    <aside class="app-sidebar">
+  <!-- Main Layout -->
+  <div class="app-layout">
+    <!-- Sidebar Filters & Navigation -->
+    <aside class="sidebar">
       <div class="sidebar-section">
-        <div class="sidebar-heading">导航视图</div>
-        <ul class="nav-list">
-          <li class="nav-item active" data-view="topics">
-            <span> 议题看板（生命周期）</span>
-            <span class="nav-badge" id="count-topics">0</span>
-          </li>
-          <li class="nav-item" data-view="settled">
-            <span> 已定结论清单</span>
-            <span class="nav-badge" id="count-settled">0</span>
-          </li>
-          <li class="nav-item" data-view="open">
-            <span> 待决策攻坚（Pending）</span>
-            <span class="nav-badge" id="count-open">0</span>
-          </li>
-          <li class="nav-item" data-view="changelog">
-            <span> 变更审计日志</span>
-            <span class="nav-badge" id="count-changelog">0</span>
-          </li>
-        </ul>
+        <div class="sidebar-title">核心视图</div>
+        <div class="nav-item active" data-view="topics">
+          <span>所有决策议题</span>
+          <span class="nav-badge" id="count-topics">0</span>
+        </div>
+        <div class="nav-item" data-view="settled">
+          <span>已定结论速查</span>
+          <span class="nav-badge" id="count-settled">0</span>
+        </div>
+        <div class="nav-item" data-view="open">
+          <span>待决策聚焦</span>
+          <span class="nav-badge" id="count-open">0</span>
+        </div>
+        <div class="nav-item" data-view="changelog">
+          <span>变更审计日志</span>
+          <span class="nav-badge" id="count-changelog">0</span>
+        </div>
       </div>
 
-      <div class="sidebar-section" id="sidebar-filters-section">
-        <div class="sidebar-heading">
-          <span>工作流状态筛选</span>
-          <a href="javascript:void(0)" onclick="window.dashboardApp.resetFilters()" style="color: var(--color-primary); font-size: 12px; text-decoration: none;">重置</a>
-        </div>
-
-        <div class="filter-pills" id="lifecycle-filters-container">
+      <div class="sidebar-section">
+        <div class="sidebar-title">工作流状态 (Workflow)</div>
+        <div class="filter-pills">
           <span class="filter-pill active" data-type="lifecycle" data-val="all">
             <span>全部状态</span>
             <span class="nav-badge" id="pill-count-all">0</span>
           </span>
-          <span class="filter-pill" data-type="lifecycle" data-val="decided" style="border-left: 3px solid var(--color-decided);">
-            <span style="color: var(--color-decided); font-weight: 700;"> 已决策</span>
+          <span class="filter-pill" data-type="lifecycle" data-val="decided">
+            <span>已决策 (Decided)</span>
             <span class="nav-badge" id="pill-count-decided">0</span>
           </span>
-          <span class="filter-pill" data-type="lifecycle" data-val="discussing" style="border-left: 3px solid var(--color-discussing);">
-            <span style="color: var(--color-discussing); font-weight: 700;"> 待讨论（细节推敲）</span>
+          <span class="filter-pill" data-type="lifecycle" data-val="discussing">
+            <span>待讨论 (Discussing)</span>
             <span class="nav-badge" id="pill-count-discussing">0</span>
           </span>
-          <span class="filter-pill" data-type="lifecycle" data-val="pending" style="border-left: 3px solid var(--color-pending);">
-            <span style="color: var(--color-pending); font-weight: 700;"> 待决策（等待拍板）</span>
+          <span class="filter-pill" data-type="lifecycle" data-val="pending">
+            <span>待决策 (Pending)</span>
             <span class="nav-badge" id="pill-count-pending">0</span>
           </span>
-          <span class="filter-pill" data-type="lifecycle" data-val="deferred"><span>⏳ 推迟再议</span><span class="nav-badge" id="pill-count-deferred">0</span></span>
-          <span class="filter-pill" data-type="lifecycle" data-val="superseded"><span> 已被替代</span><span class="nav-badge" id="pill-count-superseded">0</span></span>
+          <span class="filter-pill" data-type="lifecycle" data-val="deferred">
+            <span>推迟再议 (Deferred)</span>
+            <span class="nav-badge" id="pill-count-deferred">0</span>
+          </span>
+          <span class="filter-pill" data-type="lifecycle" data-val="superseded">
+            <span>已被替代 (Superseded)</span>
+            <span class="nav-badge" id="pill-count-superseded">0</span>
+          </span>
         </div>
       </div>
 
-      <!-- Decision Outcome Filter -->
       <div class="sidebar-section">
-        <div class="sidebar-heading">决策结论维度</div>
+        <div class="sidebar-title">决策结论与红线 (Outcome)</div>
         <div class="filter-pills">
           <span class="filter-pill active" data-type="outcome" data-val="all">
-            <span>全部结论</span>
+            <span>全部结果</span>
           </span>
-          <span class="filter-pill" data-type="outcome" data-val="accepted" style="border-left: 3px solid #10b981;">
-            <span> 已采纳</span>
+          <span class="filter-pill" data-type="outcome" data-val="accepted">
+            <span>已采纳方案</span>
           </span>
-          <span class="filter-pill" data-type="outcome" data-val=""><span>尚无结论</span></span>
-          <span class="filter-pill" data-type="outcome" data-val="partially_accepted"><span>◐ 部分同意</span></span>
-          <span class="filter-pill" data-type="outcome" data-val="rejected" style="border-left: 3px solid #ef4444;">
-            <span> 明确否决方案</span>
-            <span class="nav-badge" id="pill-count-rejected" style="background: var(--color-pending-light); color: var(--color-pending);">0</span>
+          <span class="filter-pill" data-type="outcome" data-val="partially_accepted">
+            <span>◐ 部分同意</span>
+          </span>
+          <span class="filter-pill" data-type="outcome" data-val="rejected" style="border-color: var(--color-rejected-border);">
+            <span style="color: var(--color-rejected);">明确否决红线</span>
+            <span class="nav-badge" id="pill-count-rejected" style="background: var(--color-rejected-bg); color: var(--color-rejected); border-color: var(--color-rejected-border);">0</span>
           </span>
         </div>
       </div>
 
       <div class="sidebar-section">
-        <label class="sidebar-heading" for="implementation-filter">实现状态筛选</label>
-        <select class="form-select" id="implementation-filter">
+        <div class="sidebar-title">按对象分类</div>
+        <div class="filter-pills" id="object-filters-container">
+          <!-- Populated dynamically from config -->
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="sidebar-title">代码落地进度</div>
+        <select id="implementation-filter" class="form-select" aria-label="代码落地进度筛选">
           <option value="all">全部实现状态</option>
           <option value="not_started">未开始</option>
           <option value="in_progress">进行中</option>
@@ -126,298 +170,320 @@
         </select>
       </div>
 
-      <!-- Categories Filter -->
-      <div class="sidebar-section" id="sidebar-categories-section">
-        <div class="sidebar-heading">业务对象筛选</div>
-        <div class="filter-pills" id="object-filters-container"></div>
+      <div class="sidebar-section" style="margin-top: auto; border-top: 1px solid var(--border-subtle); padding-top: 12px;">
+        <button class="btn btn-secondary" style="width: 100%;" onclick="window.dashboardApp.resetFilters()">
+          重置筛选条件
+        </button>
       </div>
     </aside>
 
-    <!-- Content Area -->
-    <main class="app-content">
-      <!-- Topbar Controls -->
-      <div class="content-topbar">
-        <div class="search-box">
-          <span></span>
-          <input type="text" id="search-input" placeholder="搜索议题标题、摘要、否决原因、最新原话或落实说明...">
-        </div>
+    <!-- Main Content Area -->
+    <main class="main-content">
 
-        <div style="display: flex; align-items: center; gap: 0.8rem;">
-          <span style="font-size: 14px; color: var(--text-dim);" id="filtered-count-label">共 0 项议题</span>
-          <button class="btn btn-secondary" id="btn-toggle-all">展开全部</button>
-          <button class="btn btn-secondary" id="btn-refresh-topics">刷新</button>
-          <div style="display: flex; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); overflow: hidden;">
-            <button class="btn btn-secondary" id="btn-view-grid" style="border: none; border-radius: 0;" title="网格卡片">⊞</button>
-            <button class="btn btn-secondary" id="btn-view-list" style="border: none; border-radius: 0;" title="紧凑列表"></button>
+      <!-- View 1: Topics Grid/List -->
+      <div id="view-topics" class="view-panel">
+        <div class="section-header">
+          <div>
+            <h2>决策议题台账</h2>
+            <span id="filtered-count-label" style="font-size: 12px; color: var(--text-dim); font-variant-numeric: tabular-nums;">加载中...</span>
           </div>
-          <button class="btn btn-primary" id="btn-review-view" title="进入阅卷式逐题处理视图"> 阅卷视图</button>
-        </div>
-      </div>
-
-      <!-- View: Topics Cards Container -->
-      <section id="view-topics" class="view-panel active">
-        <div class="topic-grid" id="topics-container">
-          <div style="color: var(--text-dim); padding: 2rem; text-align: center;">正在读取元数据并渲染...</div>
-        </div>
-      </section>
-
-      <!-- View: Settled Decisions -->
-      <section id="view-settled" class="view-panel" style="display: none;">
-        <h2 style="margin-bottom: 1rem; font-size: 20px;"> 已定结论与架构红线（不再重复提问）</h2>
-        <div id="settled-container"></div>
-      </section>
-
-      <!-- View: Open Questions -->
-      <section id="view-open" class="view-panel" style="display: none;">
-        <h2 style="margin-bottom: 1rem; font-size: 20px;"> 待决策攻坚清单（Awaiting Call）</h2>
-        <div id="open-container"></div>
-      </section>
-
-      <!-- View: Changelog -->
-      <section id="view-changelog" class="view-panel" style="display: none;">
-        <h2 style="margin-bottom: 1rem; font-size: 20px;"> 变更记录与审计日志</h2>
-        <div id="changelog-container"></div>
-      </section>
-    <!-- View: Review sheet. The global banner and sidebar stay visible while this main-area view is active. -->
-  <section id="review-view" class="review-view" aria-hidden="true">
-    <div class="review-shell">
-      <header class="review-header">
-        <div class="review-counter" aria-label="当前议题序号">
-          <span class="review-index" id="review-index">01</span>
-          <span class="review-counter-separator">/</span>
-          <span class="review-total" id="review-total">00</span>
-        </div>
-        <div class="review-heading">
-          <span class="review-topic-id" id="review-topic-id">#topic</span>
-          <h2 id="review-topic-title">阅卷视图</h2>
-        </div>
-        <button class="btn btn-secondary review-close" id="btn-review-close" type="button">返回看板</button>
-      </header>
-
-      <div class="review-content">
-        <main class="review-topic-pane">
-          <div class="review-topic-meta" id="review-topic-meta"></div>
-          <div class="review-expanded-detail" id="review-detail-body" aria-live="polite"></div>
-        </main>
-
-        <aside class="review-sidebar" aria-label="议题处理侧栏">
-          <div class="review-sidebar-section">
-            <div class="review-label">议题进展</div>
-            <div class="review-choice-group" id="review-workflow-options" role="group" aria-label="议题进展"></div>
-          </div>
-          <div class="review-sidebar-section">
-            <div class="review-label">决策结论</div>
-            <div class="review-choice-group" id="review-outcome-options" role="group" aria-label="决策结论"></div>
-          </div>
-          <div class="review-sidebar-section">
-            <div class="review-label">实现状态</div>
-            <div class="review-choice-group" id="review-implementation-options" role="group" aria-label="实现状态"></div>
-          </div>
-          <div class="review-sidebar-section review-context-section">
-            <div class="review-label">上一轮 Agent 回复（只读）</div>
-            <div class="review-readonly" id="review-agent-reply">暂无 Agent 回复</div>
-            <div class="review-agent-question" id="review-agent-question" hidden></div>
-          </div>
-          <div class="review-sidebar-section review-context-section">
-            <label class="review-label" for="review-user-opinion-input">本轮用户意见</label>
-            <textarea class="form-textarea review-user-opinion-input" id="review-user-opinion-input" rows="4" placeholder="补充或修正本轮用户意见原话"></textarea>
-          </div>
-          <div class="review-sidebar-actions">
-            <button class="btn btn-secondary review-overview-action" id="btn-review-overview" type="button" aria-expanded="false" aria-controls="review-overview-panel" title="打开议题总览">
-              <span class="review-action-icon" aria-hidden="true">▦</span>
-              <span class="review-action-caption">议题总览</span>
+          <div class="view-controls">
+            <button class="btn btn-secondary" id="btn-toggle-all">展开全部</button>
+            <button class="btn btn-secondary" id="btn-refresh-topics">刷新</button>
+            <button class="btn btn-secondary active" id="btn-view-grid" title="网格视图" aria-label="网格视图" style="padding: 5px 8px;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
             </button>
-            <div class="review-submit-group">
-              <button class="btn btn-secondary review-nav-arrow" id="btn-review-previous" type="button" title="上一个议题" aria-label="上一个议题">←</button>
-              <button class="btn btn-primary review-submit-button" id="btn-review-submit" type="button">提交</button>
-              <button class="btn btn-secondary review-nav-arrow" id="btn-review-next" type="button" title="下一个议题" aria-label="下一个议题">→</button>
-            </div>
+            <button class="btn btn-secondary" id="btn-view-list" title="列表视图" aria-label="列表视图" style="padding: 5px 8px;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
+            </button>
           </div>
-        </aside>
-      </div>
-
-      <div class="review-overview-panel" id="review-overview-panel" aria-hidden="true">
-        <div class="review-overview-heading">
-          <strong>议题总览</strong>
-          <span class="review-overview-hint">按当前看板顺序排列</span>
         </div>
-        <div class="review-overview" id="review-overview"></div>
+
+        <!-- Topics Container -->
+        <div id="topics-container" class="topic-grid">
+          <!-- Rendered by app.js -->
+        </div>
       </div>
 
-      <footer class="review-footer">
-        <span class="review-save-status" id="review-save-status" role="status"></span>
-      </footer>
-    </div>
-  </section>
+      <!-- View 2: Settled Decisions -->
+      <div id="view-settled" class="view-panel" style="display: none;">
+        <div class="section-header">
+          <h2>已定结论速查表</h2>
+        </div>
+        <div id="settled-container"></div>
+      </div>
+
+      <!-- View 3: Open Questions -->
+      <div id="view-open" class="view-panel" style="display: none;">
+        <div class="section-header">
+          <h2>待决策问题聚焦</h2>
+        </div>
+        <div id="open-container"></div>
+      </div>
+
+      <!-- View 4: Changelog -->
+      <div id="view-changelog" class="view-panel" style="display: none;">
+        <div class="section-header">
+          <h2>架构决策变更审计日志</h2>
+        </div>
+        <div id="changelog-container"></div>
+      </div>
 
     </main>
   </div>
 
-  <div class="modal-backdrop" id="modal-create-topic">
-    <div class="modal-card">
+  <!-- Fullscreen Review View -->
+  <section class="review-view" id="review-view" aria-hidden="true" aria-label="单页阅卷视图">
+    <header class="review-topbar">
+      <div class="review-progress-group">
+        <span class="review-mode-label">阅卷视图</span>
+        <span class="review-progress"><span id="review-index">00</span> / <span id="review-total">00</span></span>
+        <span class="review-topic-id" id="review-topic-id">#topic</span>
+      </div>
+      <div class="review-topbar-actions">
+        <button class="btn btn-secondary review-action-btn" id="btn-review-overview" type="button" aria-expanded="false" aria-controls="review-overview-panel" title="打开议题总览">
+          <span class="review-action-icon" aria-hidden="true">☷</span>
+          <span class="review-action-caption">议题总览</span>
+        </button>
+        <button class="btn btn-secondary review-action-btn" id="btn-review-previous" type="button" title="上一题">
+          <span class="review-action-icon" aria-hidden="true">←</span>
+          <span class="review-action-caption">上一题</span>
+        </button>
+        <button class="btn btn-secondary review-action-btn" id="btn-review-next" type="button" title="下一题">
+          <span class="review-action-icon" aria-hidden="true">→</span>
+          <span class="review-action-caption">下一题</span>
+        </button>
+        <button class="btn btn-secondary review-action-btn" id="btn-review-close" type="button" title="返回议题列表">
+          <span class="review-action-icon" aria-hidden="true">✕</span>
+          <span class="review-action-caption">返回列表</span>
+        </button>
+      </div>
+    </header>
+
+    <div class="review-overview-panel" id="review-overview-panel" aria-hidden="true">
+      <div class="review-overview" id="review-overview" aria-label="议题总览"></div>
+    </div>
+
+    <div class="review-stage">
+      <article class="review-sheet">
+        <div class="review-sheet-header">
+          <div>
+            <div class="review-topic-meta" id="review-topic-meta"></div>
+            <h2 id="review-topic-title">议题标题</h2>
+          </div>
+        </div>
+
+        <div class="review-choice-grid" aria-label="议题状态选项">
+          <div class="review-choice-block">
+            <div class="review-block-label">工作流状态</div>
+            <div class="review-choice-options" id="review-workflow-options"></div>
+          </div>
+          <div class="review-choice-block">
+            <div class="review-block-label">决策结论</div>
+            <div class="review-choice-options" id="review-outcome-options"></div>
+          </div>
+          <div class="review-choice-block">
+            <div class="review-choice-label review-block-label">实现进度</div>
+            <div class="review-choice-options" id="review-implementation-options"></div>
+          </div>
+        </div>
+
+        <section class="review-detail-body" id="review-detail-body" aria-live="polite"></section>
+
+        <section class="review-discussion-grid">
+          <div class="review-discussion-panel">
+            <div class="review-block-label">上一轮 Agent 回复（只读）</div>
+            <div class="review-agent-question" id="review-agent-question" hidden></div>
+            <div class="review-readonly-box" id="review-agent-reply"></div>
+          </div>
+        </section>
+
+        <section class="review-opinion-editor">
+          <label class="review-block-label" for="review-user-opinion-input">本轮用户意见</label>
+          <textarea class="form-textarea" id="review-user-opinion-input" placeholder="直接填写或修改本轮用户意见..."></textarea>
+          <div class="review-submit-row">
+            <span class="review-save-status" id="review-save-status"></span>
+            <button class="btn btn-success" id="btn-review-submit" type="button">提交本页修改</button>
+          </div>
+        </section>
+      </article>
+    </div>
+  </section>
+
+  <!-- Modal 1: Record Decision & Edit Status (4-Dimensional State Model) -->
+  <div class="modal-overlay" id="modal-edit-decision">
+    <div class="modal">
       <div class="modal-header">
-        <h3>新建议题</h3>
-        <button class="btn-icon" onclick="window.dashboardApp.closeModal('modal-create-topic')">关闭</button>
+        <div>
+          <div class="modal-title" id="modal-edit-title">确定决策并提交 Git</div>
+          <div style="font-size: 12px; color: var(--text-dim); margin-top: 4px; display: flex; align-items: center; gap: 6px;">
+            <span id="modal-topic-id" class="chip">#id</span>
+            <span id="modal-topic-version" class="chip">v1</span>
+            <span id="modal-topic-category" class="chip">分类</span>
+          </div>
+        </div>
+        <button class="modal-close" onclick="window.dashboardApp.closeModal('modal-edit-decision')" aria-label="关闭">&times;</button>
       </div>
       <div class="modal-body">
-        <p>创建为“待决策 / 未开始”，之后可追加讨论和结论。</p>
-        <div class="form-group">
-          <label class="form-label" for="create-id">议题 ID（英文、数字、下划线或连字符，创建后固定）</label>
-          <input class="form-input" id="create-id" maxlength="128" placeholder="例如 adr-local-backup">
+        <div id="modal-conflict-banner" class="conflict-banner" style="display: none;" role="alert"></div>
+        <!-- Dimension 1 & 2: Workflow State & Decision Outcome -->
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label" for="form-workflow-state">1. 工作流状态 (Workflow State)</label>
+            <select class="form-select" id="form-workflow-state" onchange="window.dashboardApp.onOutcomeChanged()">
+              <option value="decided">✅ 已决策 (Decided)</option>
+              <option value="discussing">💬 待讨论 (Discussing)</option>
+              <option value="pending">❓ 待决策 (Pending)</option>
+              <option value="deferred">⏳ 推迟再议 (Deferred)</option>
+              <option value="superseded">已被替代 (Superseded)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="form-decision-outcome">2. 决策结论 (Decision Outcome)</label>
+            <select class="form-select" id="form-decision-outcome" onchange="window.dashboardApp.onOutcomeChanged()">
+              <option value="">尚无结论</option>
+              <option value="accepted">已采纳 / 同意 (Accepted)</option>
+              <option value="partially_accepted">◐ 部分同意（在用户意见中说明保留项）</option>
+              <option value="rejected">明确否决 (Rejected - 红线约束)</option>
+            </select>
+          </div>
         </div>
-        <div class="form-group">
-          <label class="form-label" for="create-title">标题</label>
-          <input class="form-input" id="create-title">
+
+        <div class="form-group" id="group-superseded-by" style="display: none;">
+          <label class="form-label" for="form-superseded-by">替代议题 ID (Superseded By)</label>
+          <input type="text" class="form-input" id="form-superseded-by" placeholder="例如: new-topic-id">
         </div>
-        <div class="form-group">
-          <label class="form-label" for="create-object">所属对象（可选）</label>
-          <input class="form-input" id="create-object" placeholder="例如 存储层">
+
+        <!-- Rejection Reason (Shown only when outcome == rejected) -->
+        <div class="form-group" id="group-rejection-reason" style="display: none; background: var(--color-rejected-bg); padding: 12px; border-radius: var(--radius-sm); border: 1px solid var(--color-rejected-border);">
+          <label class="form-label" for="form-rejection-reason" style="color: var(--color-rejected);">否决原因与重新讨论前提 (Agent 防误触红线必填)</label>
+          <input type="text" class="form-input" id="form-rejection-reason" placeholder="例如：性能开销过大，除非未来支持零拷贝否则禁止重提">
         </div>
-        <div class="form-group">
-          <label class="form-label" for="create-content">核心论述与依据（可选）</label>
-          <textarea class="form-textarea" id="create-content" rows="6"></textarea>
+
+        <!-- Dimension 3: Implementation State & Verification -->
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label" for="form-impl-state">3. 代码实现进度 (Implementation State)</label>
+            <select class="form-select" id="form-impl-state">
+              <option value="not_started">未开始 (Not Started)</option>
+              <option value="in_progress">⏳ 进行中 (In Progress)</option>
+              <option value="implemented">🎉 已实现 (Implemented)</option>
+              <option value="verified">已核验 (Verified)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="form-impl-commit">关联代码 Commit / PR 引用</label>
+            <input type="text" class="form-input" id="form-impl-commit" placeholder="例如: a1b2c3d 或 PR #42">
+          </div>
         </div>
-        <p id="create-status" role="status"></p>
+
+        <!-- Dimension 4: Multi-Round Discussion Input -->
+        <div class="form-group">
+          <label class="form-label" for="form-user-opinion">4. 本轮用户意见 / 拍板指示 (User Opinion)</label>
+          <textarea class="form-textarea" id="form-user-opinion" placeholder="录入用户明确意见或指示原话..."></textarea>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="form-agent-reply">5. 团队 / Agent 落实答复与排期 (Agent Reply)</label>
+          <textarea class="form-textarea" id="form-agent-reply" placeholder="录入团队技术回应与落地承诺..."></textarea>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="form-commit-message">Git 自动语义提交说明 (Commit Message)</label>
+          <input type="text" class="form-input" id="form-commit-message">
+        </div>
       </div>
       <div class="modal-footer">
-        <button class="btn btn-secondary" onclick="window.dashboardApp.closeModal('modal-create-topic')">关闭并保留草稿</button>
+        <button class="btn btn-secondary" onclick="window.dashboardApp.closeModal('modal-edit-decision')">取消</button>
+        <button class="btn btn-success" id="btn-submit-decision" onclick="window.dashboardApp.submitDecision()">
+          <span data-save-icon></span><span data-save-label>确定决策并生成 Git Commit</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 2: Create New Topic -->
+  <div class="modal-overlay" id="modal-create-topic">
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title">新建架构或产品决策议题</div>
+        <button class="modal-close" onclick="window.dashboardApp.closeModal('modal-create-topic')" aria-label="关闭">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p id="create-status" class="form-label" role="status"></p>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label" for="create-id">议题唯一标识 ID (英文/数字/连字符)</label>
+            <input type="text" class="form-input" id="create-id" placeholder="例如: storage-engine-v2">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="create-object">所属对象分类</label>
+            <input type="text" class="form-input" id="create-object" placeholder="例如: 核心引擎 / 网关 / 前端">
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="create-title">议题标题</label>
+          <input type="text" class="form-input" id="create-title" placeholder="例如: 存储引擎是否切换为 SQLite WAL 模式">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="create-content">核心背景、备选方案与现实依据 (支持 Markdown)</label>
+          <textarea class="form-textarea" id="create-content" style="min-height: 150px;" placeholder="描述问题背景、方案对比及推荐结论..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="window.dashboardApp.closeModal('modal-create-topic')">取消</button>
         <button class="btn btn-primary" id="btn-submit-create" onclick="window.dashboardApp.submitCreate()">创建议题</button>
       </div>
     </div>
   </div>
 
-  <!-- Modal: Record Decision & Commit Git -->
-  <div class="modal-backdrop" id="modal-edit-decision">
-    <div class="modal-card">
+  <!-- Modal 3: Agent Context Integration -->
+  <div class="modal-overlay" id="modal-agent-context">
+    <div class="modal">
       <div class="modal-header">
-        <h3 id="modal-edit-title"> 确定决策并提交 Git</h3>
-        <button class="btn-icon" onclick="window.dashboardApp.closeModal('modal-edit-decision')">关闭</button>
+        <div>
+          <div class="modal-title">Agent 防漂移上下文提取器</div>
+          <div style="font-size: 12px; color: var(--text-dim); margin-top: 2px;">
+            将已生效结论与明确否决红线注入 AI Agent，防止重复推翻已定方案
+          </div>
+        </div>
+        <button class="modal-close" onclick="window.dashboardApp.closeModal('modal-agent-context')" aria-label="关闭">&times;</button>
       </div>
       <div class="modal-body">
-        <!-- 并发冲突提示横幅 -->
-        <div id="modal-conflict-banner" class="conflict-banner" style="display: none;"></div>
-
-        <div style="display: flex; gap: 0.5rem; align-items: center; font-size: 12px; color: var(--text-dim); margin-bottom: 0.6rem;">
-          <span class="chip" id="modal-topic-id">#id</span>
-          <span class="chip" id="modal-topic-version">v1</span>
-          <span id="modal-topic-category">分类</span>
+        <div style="background: var(--bg-card); padding: 10px 12px; border-radius: var(--radius-sm); font-size: 12px; color: var(--text-dim); border: 1px solid var(--border-subtle);">
+          <div><strong>CLI 调用方式：</strong> <code>python -m core.agent_context --format markdown</code></div>
+          <div style="margin-top: 4px;"><strong>HTTP API：</strong> <code>GET /api/agent/context?format=markdown</code></div>
         </div>
-
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
-          <div class="form-group">
-            <label class="form-label">议题进展（何时继续）：</label>
-            <select class="form-select" id="form-workflow-state" onchange="window.dashboardApp.onOutcomeChanged()">
-              <option value="decided"> 已决策</option>
-              <option value="discussing"> 待讨论（技术细节、参数推敲）</option>
-              <option value="pending"> 待决策（等待拍板决断）</option>
-              <option value="deferred">⏳ 推迟再议（按原话中的条件继续）</option>
-              <option value="superseded"> 已被新议题替代</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label class="form-label">决策结论（是否同意）：</label>
-            <select class="form-select" id="form-decision-outcome" onchange="window.dashboardApp.onOutcomeChanged()">
-              <option value="">尚无结论</option>
-              <option value="accepted"> 采纳接受 (Accepted)</option>
-              <option value="partially_accepted">◐ 部分同意（在原话中说明范围）</option>
-              <option value="rejected"> 明确否决方案 (Rejected)</option>
-            </select>
-          </div>
-        </div>
-
-        <p class="form-label">同意“条件满足后再议”时，可同时选择“采纳接受”和“推迟再议”，在原话中保留约定的条件；这不表示立即实施。</p>
-        <div class="form-group" id="group-superseded-by" style="display: none;">
-          <label class="form-label" for="form-superseded-by">替代议题 ID（可选，保留原议题结论供追溯）：</label>
-          <input class="form-input" id="form-superseded-by" placeholder="例如 adr-new-plan">
-        </div>
-
-        <!-- 否决原因（仅在 outcome === rejected 时突出显示） -->
-        <div class="form-group" id="group-rejection-reason" style="display: none;">
-          <label class="form-label" style="color: var(--color-pending); font-weight: 700;"> 否决原因与重新讨论前提（约束 Agent 不得重提）：</label>
-          <textarea class="form-textarea" id="form-rejection-reason" rows="2" placeholder="记录为何否决该方案、在何种客观条件变化下方可重提..."></textarea>
-        </div>
-
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
-          <div class="form-group">
-            <label class="form-label">代码实现状态：</label>
-            <select class="form-select" id="form-impl-state">
-              <option value="not_started">未开始 (not_started)</option>
-              <option value="in_progress">进行中 (in_progress)</option>
-              <option value="implemented">已实现 (implemented)</option>
-              <option value="verified"> 已核验通过 (verified)</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label class="form-label">实现 Commit Hash / PR：</label>
-            <input type="text" class="form-input" id="form-impl-commit" placeholder="如：d7aefe5 或 PR #12">
-          </div>
-        </div>
-
         <div class="form-group">
-          <label class="form-label"> 用户意见（最新原话，将作为第 n 轮决策追加）：</label>
-          <textarea class="form-textarea" id="form-user-opinion" rows="3" placeholder="录入用户明确意见或指示原话..."></textarea>
+          <label class="form-label" for="agent-context-markdown">生成的 Agent System Prompt 约束规范：</label>
+          <textarea class="form-textarea" id="agent-context-markdown" style="min-height: 280px; font-family: var(--font-mono); font-size: 12px;" readonly></textarea>
         </div>
-
-        <div class="form-group">
-          <label class="form-label"> 团队/Agent 答复（落实说明与排期）：</label>
-          <textarea class="form-textarea" id="form-agent-reply" rows="3" placeholder="录入团队技术回应与落地承诺..."></textarea>
-        </div>
-
-        <div class="form-group">
-          <label class="form-label">Git 变更提交说明 (Commit Message)：</label>
-          <input type="text" class="form-input" id="form-commit-message" placeholder="简要说明本次决定的具体内容">
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button class="btn btn-secondary" onclick="window.dashboardApp.closeModal('modal-edit-decision')">取消</button>
-        <button class="btn btn-primary" id="btn-submit-decision" onclick="window.dashboardApp.submitDecision()">确定决策并生成 Git Commit</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Modal: Agent Context Export -->
-  <div class="modal-backdrop" id="modal-agent-context">
-    <div class="modal-card" style="max-width: 750px; width: 90%;">
-      <div class="modal-header">
-        <h3> 面向 Agent 的治理上下文 Prompt 导出</h3>
-        <button class="btn-icon" onclick="window.dashboardApp.closeModal('modal-agent-context')">关闭</button>
-      </div>
-      <div class="modal-body">
-        <p style="font-size: 14px; color: var(--text-dim); margin-bottom: 0.8rem;">
-          以下是台账中的当前结论、否决原因与讨论记录，可复制到 Agent 的任务上下文。请明确区分当前结论和历史意见，并核对实际执行结果。
-        </p>
-        <textarea class="form-textarea" id="agent-context-markdown" rows="14" readonly style="font-family: var(--font-mono); font-size: 12px;"></textarea>
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" onclick="window.dashboardApp.closeModal('modal-agent-context')">关闭</button>
-        <button class="btn btn-primary" onclick="window.dashboardApp.copyAgentContext()"> 复制 Markdown Prompt</button>
+        <button class="btn btn-primary" onclick="window.dashboardApp.copyAgentContext()">复制 Markdown 约束</button>
       </div>
     </div>
   </div>
 
-  <!-- Time Machine Drawer -->
-  <div class="drawer-backdrop" id="drawer-time-machine">
-    <div class="drawer-panel">
-      <div class="modal-header">
-        <h3> 版本历史与回溯（时间机器）</h3>
-        <button class="btn-icon" onclick="window.dashboardApp.closeDrawer('drawer-time-machine')">关闭</button>
+  <!-- Side Drawer: Time Machine (Git Log & Revisions) -->
+  <aside class="drawer" id="drawer-time-machine">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title">版本时光机 (Time Machine)</div>
+        <div style="font-size: 12px; color: var(--text-dim);">支持单议题精准回滚与全库快照恢复</div>
       </div>
-      <div style="padding: 1rem; overflow-y: auto; flex: 1;" id="drawer-history-list">
-        <div style="color: var(--text-dim); text-align: center;">正在加载 Git 提交记录与快照...</div>
-      </div>
+      <button class="modal-close" onclick="window.dashboardApp.closeDrawer('drawer-time-machine')" aria-label="关闭">&times;</button>
     </div>
-  </div>
+    <div class="modal-body" id="drawer-history-list">
+      <!-- Populated by app.js -->
+    </div>
+  </aside>
 
-  <!-- Toast Container -->
-  <div id="toast-container" class="toast-container"></div>
-
-  <!-- Scripts -->
-  <script src="default_data.js"></script>
+  <!-- Safe Markdown Renderer & Client App -->
+  <script src="day-night-switch.js"></script>
   <script src="markdown.js"></script>
-  <script src="diagrams.js"></script>
   <script src="agent-question.js"></script>
   <script src="app.js"></script>
-  <script src="vendor/anime-4.5.0.umd.min.js"></script>
-  <script src="motion.js"></script>
 </body>
 </html>
