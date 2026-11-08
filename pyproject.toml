@@ -9,7 +9,7 @@ description = "通用 AI Agent 结对编程架构决策台账与 Git 自动化�
 readme = "README.md"
 license = { text = "GPL-3.0-or-later" }
 authors = [
-    { name = "CyberNova", email = "rxe5bn7UxYVes4DH1Df6FY+CyberNova@noreply.cnb.cool" }
+    { name = "CyberNova", email = "295488275+CyberNova2333@users.noreply.github.com" }
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
