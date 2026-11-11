@@ -32,3 +32,11 @@ Synced through b732e7c9c6fd23d696efb852c6cf174f9768881b；源码树与原锚点�
 验证：完整 Python 回归 226 项中 225 项通过、1 项跳过；Node 回归和应用脚本语法检查通过。运行中的用户数据库未纳入提交。
 
 Synced through af17fede87aaa7a4b6c42e3bec9b6d443e1d6382；本节对应随后提交的工作树。
+
+## 工作台交互重构与议题归档能力（2026-11-11）
+
+重构前端为双栏主从工作台、三段式详情驾驶舱与底部可折叠拍板栏，补齐更正最近一轮、提案编辑、实现核验、参数化上下文提取、一致性诊断热备份及全界面自绘 SVG 图标体系；后端新增 `DecisionService.delete_topic` 与 `POST /api/topic/<id>/delete` 安全归档及撤销恢复接口。
+
+验证：`python -m unittest discover tests`（227 项通过）、`node --test tests/*.test.js`（12 项通过）、`node --check web/app.js` 与 `git diff --check` 通过。
+
+Synced through df389872dba882a973d3c3dc2245acb4a33186a7；本节对应随后提交的工作树。

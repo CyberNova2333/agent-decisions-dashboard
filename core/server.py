@@ -373,7 +373,15 @@ def make_handler(server: DashboardServer):
                 settled, pending = server.overview_from_topics(meta_list)
                 res = {
                     "topics": meta_list,
-                    "capabilities": {"edit_latest_round": True, "partially_accepted": True, "independent_progress": True},
+                    "capabilities": {
+                        "edit_latest_round": True,
+                        "partially_accepted": True,
+                        "independent_progress": True,
+                        "delete_topic": True,
+                        "verify_topic": True,
+                        "edit_proposal": True,
+                        "recovery_tools": True,
+                    },
                     "settled_decisions": settled,
                     "open_questions": pending,
                     "changelog": server.load_changelog(),
@@ -541,7 +549,7 @@ def make_handler(server: DashboardServer):
                     self._send_json(400, {"error": "invalid_expected_version", "message": "X-Expected-Version 格式非法，必须是有效整数"})
                     return
 
-            match = re.fullmatch(r"/api/topic/([^/]+)/(save|restore|verify)", path)
+            match = re.fullmatch(r"/api/topic/([^/]+)/(save|restore|verify|delete)", path)
             if path.startswith("/api/topic/") and path != "/api/topic/create":
                 if not match:
                     self._send_json(404, {"error": "not_found"})
@@ -561,7 +569,7 @@ def make_handler(server: DashboardServer):
                         match[1], data.get("rev_id"), data.get("author", "用户/前端"), data.get("reason", ""), None)
                     valid, cached = server.db.check_idempotency(request_id, match[1], req_hash)
                     creation_replay = valid and cached is not None
-                if expected_ver is None and not creation_replay and (match[2] == "verify" or server.db.get_topic(match[1])):
+                if expected_ver is None and not creation_replay and (match[2] in ("verify", "delete") or server.db.get_topic(match[1])):
                     self._send_json(428, {"error": "version_required", "message": "请先读取议题，再携带 expected_version 写入"})
                     return
 
@@ -690,6 +698,35 @@ def make_handler(server: DashboardServer):
                     self._send_json(400, {"error": "validation_error", "message": str(e)})
                 except Exception as e:
                     self._send_json(500, {"error": "verify_failed", "message": str(e)})
+                return
+
+            # 4.5. 归档删除单个议题
+            elif path.startswith("/api/topic/") and path.endswith("/delete"):
+                raw_id = path.replace("/api/topic/", "").replace("/delete", "").strip()
+                try:
+                    res = server.service.delete_topic(
+                        topic_id=raw_id,
+                        author=data.get("author", "用户/前端"),
+                        reason=data.get("reason", ""),
+                        expected_version=expected_ver,
+                        request_id=request_id
+                    )
+                    self._send_json(200, res)
+                except VersionConflictError as e:
+                    current_data = server.db.get_topic(e.topic_id)
+                    self._send_json(409, {
+                        "error": "version_conflict",
+                        "message": str(e),
+                        "current_version": e.current_version,
+                        "expected_version": e.expected_version,
+                        "current_topic": current_data
+                    })
+                except IdempotencyConflictError as e:
+                    self._send_json(409, {"error": "idempotency_conflict", "message": str(e)})
+                except TopicValidationError as e:
+                    self._send_json(400, {"error": "validation_error", "message": str(e)})
+                except Exception as e:
+                    self._send_json(500, {"error": "delete_failed", "message": str(e)})
                 return
 
             # 5. 全库快照回滚

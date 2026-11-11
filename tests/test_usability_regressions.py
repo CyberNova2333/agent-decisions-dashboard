@@ -104,3 +104,21 @@ class UsabilityTests(unittest.TestCase):
         self.assertEqual(len(self.detail()['rounds']), 1)
         created = self.svc.create_topic({'id': 'empty', 'title': 'No discussions'})
         self.assertEqual(created['round'], 0)
+
+    def test_delete_topic_archives_records_snapshot_and_supports_undo_restore(self):
+        with self.assertRaises(VersionConflictError):
+            self.svc.delete_topic('a', expected_version=99, request_id='del-bad-ver')
+        result = self.svc.delete_topic('a', expected_version=1, request_id='del-1', reason='archive topic a')
+        self.assertTrue(result['removed'])
+        self.assertIsNotNone(result['prior_rev_id'])
+        self.assertIsNone(self.svc.db.get_topic('a'))
+        self.assertFalse((self.svc.config.decisions_dir / 'a.md').exists())
+        self.assertTrue(self.svc.recovery.check_consistency()['consistent'])
+        replay = self.svc.delete_topic('a', expected_version=1, request_id='del-1', reason='archive topic a')
+        self.assertTrue(replay.get('idempotent_replay'))
+        self.assertEqual(replay['prior_rev_id'], result['prior_rev_id'])
+        restored = self.svc.restore_single_topic('a', result['prior_rev_id'], request_id='undo-del-1')
+        self.assertEqual(restored['topic']['id'], 'a')
+        self.assertTrue((self.svc.config.decisions_dir / 'a.md').exists())
+        self.assertEqual(self.detail()['title'], 'Topic')
+        self.assertTrue(self.svc.recovery.check_consistency()['consistent'])

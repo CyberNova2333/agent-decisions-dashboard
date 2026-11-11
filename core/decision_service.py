@@ -889,6 +889,12 @@ class DecisionService:
                    "author": author, "reason": reason, "expected_version": expected_version}
         return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
 
+    @staticmethod
+    def delete_request_hash(topic_id, author, reason, expected_version):
+        payload = {"operation": "delete", "topic_id": topic_id,
+                   "author": author, "reason": reason, "expected_version": expected_version}
+        return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
     def _pending_git_status(self, receipt):
         if not self.config.git_commit_enabled:
             return "disabled"
@@ -1534,3 +1540,157 @@ class DecisionService:
             finally:
                 if temp_file.exists():
                     temp_file.unlink()
+
+    @serialized
+    def delete_topic(
+        self,
+        topic_id: str,
+        author: str = "用户/前端",
+        reason: str = "",
+        expected_version: Optional[int] = None,
+        request_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        归档删除单个议题：
+        将权威 Markdown 移入 .archived_rollback 目录，删除 SQLite 索引行，记录 TOPIC_REMOVE 审计快照，
+        保留 prior_rev_id 以支持一键撤销恢复。
+        """
+        topic_id = self.validate_topic_id(topic_id)
+        if not isinstance(author, str) or not isinstance(reason, str):
+            raise TopicValidationError("操作人与原因必须为字符串")
+        author = author.strip() or "用户/前端"
+        reason = reason.strip()
+
+        req_hash = self.delete_request_hash(topic_id, author, reason, expected_version)
+        cached_res = None
+        if request_id:
+            is_valid, cached_res = self.db.check_idempotency(request_id, topic_id, req_hash)
+            if not is_valid:
+                raise IdempotencyConflictError(f"请求 ID [{request_id}] 冲突：相同 ID 携带了不同的删除参数或版本")
+            if cached_res is not None:
+                if cached_res.get("status") in ("success", "completed") and cached_res.get("git_status") not in (None, "pending"):
+                    cached_res["is_replay"] = True
+                    cached_res["idempotent_replay"] = True
+                    return cached_res
+                if cached_res.get("status") == "applied" or cached_res.get("git_status") == "pending":
+                    self.recovery.sync_metadata_json()
+                    cached_res["export_status"] = "ok"
+                    cached_res["git_status"] = self._pending_git_status(cached_res)
+                    if cached_res["git_status"] == "pending":
+                        git_res = self.git.commit_decision(
+                            topic_title=cached_res.get("deleted_title", topic_id),
+                            lifecycle_badge="归档删除",
+                            summary=f"归档删除议题 [{topic_id}]" + (f" ({reason})" if reason else ""),
+                            staged_files=[self.config.decisions_dir / f"{topic_id}.md", self.config.metadata_json_path, self.config.database_path]
+                        )
+                        cached_res["git_status"] = git_res.status
+                        cached_res["commit_hash"] = git_res.commit_hash or "none"
+                        cached_res["git_message"] = git_res.message
+                    else:
+                        cached_res["git_message"] = "自动提交已关闭或台账已有后续改动，未补交旧请求"
+                    cached_res["status"] = "success"
+                    self.db.record_idempotency(request_id, topic_id, req_hash, cached_res, status="completed")
+                    cached_res["is_replay"] = True
+                    return cached_res
+
+        current_topic = self.db.get_topic(topic_id)
+        if current_topic is None:
+            raise TopicValidationError(f"未找到议题 [{topic_id}]")
+
+        current_ver = current_topic.get("version", 1)
+        if expected_version is None:
+            raise TopicValidationError("删除议题必须提供 expected_version")
+        if expected_version != current_ver:
+            raise VersionConflictError(current_version=current_ver, expected_version=expected_version, topic_id=topic_id)
+
+        prev_revs = self.db.get_revisions(limit=1, topic_id=topic_id)
+        if not prev_revs:
+            prev_revs = self.db.get_revisions(limit=1)
+        prior_rev_id = prev_revs[0]["rev_id"] if prev_revs else None
+
+        md_file = self.config.decisions_dir / f"{topic_id}.md"
+        archive_dir = self.config.decisions_dir / ".archived_rollback"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        archive_target = archive_dir / f"{topic_id}_{uuid.uuid4().hex[:6]}.md"
+        if md_file.exists():
+            shutil.move(str(md_file), str(archive_target))
+
+        try:
+            with self.db.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM topics WHERE id = ? AND version = ?", (topic_id, expected_version))
+                if cursor.rowcount == 0:
+                    cur_row = self.db.get_topic(topic_id)
+                    cur_v = cur_row.get("version", 0) if cur_row else 0
+                    raise VersionConflictError(current_version=cur_v, expected_version=expected_version, topic_id=topic_id)
+                conn.commit()
+
+            self.db.record_changelog(
+                scope=f"[{current_topic['title']}](#{topic_id})",
+                change="归档删除议题 [📦 已归档]",
+                basis=f"原因: {reason}" if reason else "用户在看板归档删除议题"
+            )
+            diff_remove_str = f"delete_of={topic_id}, v={current_ver}" + (f", request_id={request_id}" if request_id else "") + (f", reason={reason}" if reason else "")
+            new_rev = self.db.commit_revision(
+                action_type="TOPIC_REMOVE",
+                summary=f"归档删除议题 [{current_topic['title']}]" + (f" - {reason}" if reason else ""),
+                topic_id=topic_id,
+                author=author,
+                diff_summary=diff_remove_str
+            )
+        except VersionConflictError:
+            latest_row = self.db.get_topic(topic_id)
+            if latest_row:
+                self._sync_disk_from_db_row(topic_id, latest_row)
+                if archive_target.exists():
+                    try:
+                        archive_target.unlink()
+                    except OSError:
+                        pass
+            elif archive_target.exists():
+                shutil.move(str(archive_target), str(md_file))
+            raise
+        except Exception:
+            if archive_target.exists():
+                shutil.move(str(archive_target), str(md_file))
+            if self.db.get_topic(topic_id) is None:
+                self.db.upsert_topic(
+                    current_topic,
+                    exact_version=current_topic["version"],
+                    request_id=current_topic.get("last_request_id")
+                )
+            raise
+
+        res = {
+            "status": "applied",
+            "removed": True,
+            "deleted": True,
+            "topic_id": topic_id,
+            "deleted_title": current_topic["title"],
+            "previous_version": current_ver,
+            "prior_rev_id": prior_rev_id,
+            "new_revision": new_rev["rev_hash"],
+            "save_status": "ok",
+            "export_status": "pending",
+            "git_status": "pending",
+            "message": f"议题 [{topic_id}] 已归档删除"
+        }
+        if request_id:
+            self.db.record_idempotency(request_id, topic_id, req_hash, res, status="applied")
+
+        self.recovery.sync_metadata_json()
+        res["export_status"] = "ok"
+
+        git_res = self.git.commit_decision(
+            topic_title=current_topic["title"],
+            lifecycle_badge="归档删除",
+            summary=f"归档删除议题 [{topic_id}]" + (f" ({reason})" if reason else ""),
+            staged_files=[md_file, self.config.metadata_json_path, self.config.database_path]
+        )
+        res["git_status"] = git_res.status
+        res["commit_hash"] = git_res.commit_hash or "none"
+        res["git_message"] = git_res.message
+        res["status"] = "success"
+        if request_id:
+            self.db.record_idempotency(request_id, topic_id, req_hash, res, status="completed")
+        return res
