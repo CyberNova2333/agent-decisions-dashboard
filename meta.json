@@ -1,0 +1,62 @@
+{
+  "$schema": "https://raw.githubusercontent.com/CyberNova2333/cybernova-homepage/main/public/schemas/repo-meta.v1.json",
+  "schemaVersion": 1,
+  "slug": "agent-decisions-dashboard",
+  "name": "Agent Decisions Dashboard",
+  "title": {
+    "zh": "Agent Decisions Dashboard · 本地开发决策记录与批注看板",
+    "en": "Agent Decisions Dashboard · Local Technical Decision Log & Review Board"
+  },
+  "visibility": "public",
+  "status": "active",
+  "category": "ai-agent",
+  "featured": true,
+  "order": 7,
+  "repository": "https://github.com/CyberNova2333/agent-decisions-dashboard",
+  "homepage": "https://cybernova2333.github.io/agent-decisions-dashboard/",
+  "docsUrl": "https://cybernova2333.github.io/agent-decisions-dashboard/docs/",
+  "license": "GPL-3.0-only",
+  "primaryLanguage": "Python",
+  "techStack": [
+    "Python Standard Library",
+    "SQLite",
+    "Vanilla JS",
+    "Mermaid",
+    "Anime.js"
+  ],
+  "tags": [
+    "decision-log",
+    "sqlite",
+    "python",
+    "local-tool"
+  ],
+  "summary": {
+    "zh": "用 Python 标准库和 SQLite 写的本地小看板，用来记录平时和 AI 编程工具讨论过的技术方案、批注修改意见以及历史版本快照。",
+    "en": "Local dashboard built with the Python standard library and SQLite for recording technical discussions, review comments, and snapshots when working with AI coding tools."
+  },
+  "highlights": {
+    "zh": [
+      "后端只用 Python 标准库和 SQLite，前端直接打包了 Mermaid 与 Anime.js，不需要安装 npm 依赖即可直接启动",
+      "支持在网页上对 Agent 提交的方案逐条打勾、写批注，或者标记为部分同意、推迟再议",
+      "带简单的命令行检查脚本和数据库快照恢复功能，防止误改历史记录"
+    ],
+    "en": [
+      "Uses only the Python standard library and SQLite on the backend, with bundled static frontend assets",
+      "Web UI for reviewing proposed plans, adding inline notes, and marking items as accepted or deferred",
+      "Includes CLI helper hooks and SQLite snapshot backup/restore"
+    ]
+  },
+  "quickStart": [
+    "python -m unittest discover -s tests",
+    "python start_dashboard.py"
+  ],
+  "roadmap": {
+    "stage": "日常维护",
+    "stageEn": "Maintained",
+    "milestone": {
+      "zh": "日常本地使用中，已完成批注视图、单选问答卡片和快照备份功能。",
+      "en": "In daily local use with review annotations, question cards, and snapshot backups."
+    }
+  },
+  "updatedAt": "2026-11-11"
+}
