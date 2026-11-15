@@ -1,102 +1,85 @@
-// VitePress 官方文档配置 (Coolify 架构风格 + 中英双语支持)
 import { defineConfig } from 'vitepress'
+import { guideLinks } from './guide-links.mts'
+
+const repoGuideRouteMap: Record<string, string> = {
+  'README.md': 'docs/architecture',
+  'walkthroughs/one-real-run.md': 'docs/architecture#真实运行全链路走读',
+  'code-map.md': 'docs/architecture#源码目录与模块地图',
+  'glossary.md': 'docs/architecture#关键边界与决策迁移',
+  'modules/save-idempotency-and-recovery.md': 'docs/architecture#持久化与恢复机制',
+  'modules/states-and-agent-workflow.md': 'docs/contracts',
+  'references/source-evidence.md': 'docs/architecture#源码证据与验证边界',
+  'references/quality-review.md': 'docs/architecture#源码证据与验证边界',
+  'change-log.md': 'docs/architecture#关键边界与决策迁移',
+}
 
 export default defineConfig({
   cleanUrls: true,
+  markdown: {
+    config(md) {
+      md.use(guideLinks(repoGuideRouteMap))
+    },
+  },
   locales: {
     root: {
       label: '简体中文',
       lang: 'zh-CN',
-      title: "Agent Decisions Dashboard 官方文档",
-      description: "Agent Decisions Dashboard 是针对自主 Agent 运行时的决策全景可视化与可观测性审计面板。",
+      title: 'Agent Decisions Dashboard 官方文档',
+      description: '面向个人与本机 AI 编程工具协作的 Python 标准库 + SQLite 本地决策台账与审阅工作台文档。',
       themeConfig: {
-        siteTitle: "Agent 决策面板",
+        siteTitle: 'Agent 决策面板',
         nav: [
-          { text: '官网首页', link: '/' },
-          { text: '快速入门', link: '/docs/' },
-          { text: '系统架构', link: '/docs/architecture' },
-          { text: '配置指南', link: '/docs/configuration' },
-          { text: '常见问题', link: '/docs/faq' },
+          { text: '首页', link: '/' },
+          { text: '起步与部署', link: '/docs/' },
+          { text: '接口与契约', link: '/docs/contracts' },
+          { text: '原理与源码', link: '/docs/architecture' },
           { text: 'GitHub', link: 'https://github.com/CyberNova2333/agent-decisions-dashboard' },
         ],
         sidebar: [
           {
-            text: '快速入门',
+            text: '三阶段文档导览',
             items: [
-              { text: '项目概览与上手', link: '/docs/' },
-            ]
+              { text: '1. 起步与配置部署', link: '/docs/' },
+              { text: '2. 接口与扩展契约', link: '/docs/contracts' },
+              { text: '3. 原理与源码导览（含决策迁移）', link: '/docs/architecture' },
+            ],
           },
-          {
-            text: '系统架构',
-            items: [
-              { text: '架构设计与全景图', link: '/docs/architecture' },
-            ]
-          },
-          {
-            text: '配置与实践',
-            items: [
-              { text: '配置与使用指南', link: '/docs/configuration' },
-            ]
-          },
-          {
-            text: '运维与支持',
-            items: [
-              { text: '常见问题与排错', link: '/docs/faq' },
-            ]
-          }
         ],
         outline: { level: [2, 3], label: '本页目录' },
-        docFooter: { prev: '上一页', next: '下一页' },
-      }
+        docFooter: { prev: '上一阶段', next: '下一阶段' },
+      },
     },
     en: {
       label: 'English',
       lang: 'en-US',
       link: '/en/',
-      title: "Agent Decisions Dashboard Documentation",
-      description: "Agent Decisions Dashboard is a visual decision graph and observability audit platform for autonomous AI agent runtimes.",
+      title: 'Agent Decisions Dashboard Documentation',
+      description: 'Documentation for the Python standard-library and SQLite local technical decision ledger and review workbench.',
       themeConfig: {
-        siteTitle: "Agent Decisions",
+        siteTitle: 'Agent Decisions',
         nav: [
           { text: 'Home', link: '/en/' },
-          { text: 'Quick Start', link: '/en/docs/' },
-          { text: 'Architecture', link: '/en/docs/architecture' },
-          { text: 'Configuration', link: '/en/docs/configuration' },
-          { text: 'FAQ', link: '/en/docs/faq' },
+          { text: 'Setup & Config', link: '/en/docs/' },
+          { text: 'Contracts & Hooks', link: '/en/docs/contracts' },
+          { text: 'Architecture & Code', link: '/en/docs/architecture' },
           { text: 'GitHub', link: 'https://github.com/CyberNova2333/agent-decisions-dashboard' },
         ],
         sidebar: [
           {
-            text: 'Quick Start',
+            text: 'Progressive Guide',
             items: [
-              { text: 'Overview & Getting Started', link: '/en/docs/' },
-            ]
+              { text: '1. Setup & Configuration', link: '/en/docs/' },
+              { text: '2. API Contracts & Extensions', link: '/en/docs/contracts' },
+              { text: '3. Architecture, Code & Migrations', link: '/en/docs/architecture' },
+            ],
           },
-          {
-            text: 'Architecture',
-            items: [
-              { text: 'Architecture Design', link: '/en/docs/architecture' },
-            ]
-          },
-          {
-            text: 'Configuration & Practice',
-            items: [
-              { text: 'Configuration Guide', link: '/en/docs/configuration' },
-            ]
-          },
-          {
-            text: 'Operations & Support',
-            items: [
-              { text: 'FAQ & Diagnostics', link: '/en/docs/faq' },
-            ]
-          }
         ],
         outline: { level: [2, 3], label: 'On this page' },
-        docFooter: { prev: 'Previous page', next: 'Next page' },
-      }
-    }
+        docFooter: { prev: 'Previous stage', next: 'Next stage' },
+      },
+    },
   },
   themeConfig: {
     search: { provider: 'local' },
-  }
+  },
 })

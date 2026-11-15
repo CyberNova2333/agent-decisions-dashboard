@@ -4,7 +4,7 @@
 
 ## 使用看板处理任务
 
-1. 明确目标项目的 `dashboard.config.json` 和正在运行的服务。配置中的相对路径以配置所在目录为准。先读 [Agent 操作指南](docs/agent-workflow.md)。
+1. 明确目标项目的 `dashboard.config.json` 和正在运行的服务。配置中的相对路径以配置所在目录为准。先读 [接口与 Agent 协作契约](docs-site/docs/contracts.md) 与 [状态模型与 Agent 工作流](repo-docs/modules/states-and-agent-workflow.md)。
 2. 任务前执行只读钩子，确认连接的是目标项目、数据一致，再读取相关结论与讨论：
 
    ```sh

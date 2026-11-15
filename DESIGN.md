@@ -139,7 +139,7 @@ components:
 
 # Agent Decisions Dashboard 质感设计系统规范 (`DESIGN.md`)
 
-本文档是 [`agent-decisions-dashboard`](file:///D:/Projects/CyberNova2333/git-repos/agent-decisions-dashboard) 的质感设计系统规范。项目基于 GitHub Primer 功能主义设计体系，引入**工程座舱与决策台账质感设计（Engineering Cockpit & Ledger Tactile Materiality）**，针对多智能体协作、四维状态治理、多轮问答讨论流、CAS 乐观锁冲突解决与全屏专注审阅工作流，实现微拟物光影分层、物理斜角高光与触觉按压反馈。
+本文档是 `agent-decisions-dashboard` 的质感设计系统规范。项目基于 GitHub Primer 功能主义设计体系，引入**工程座舱与决策台账质感设计（Engineering Cockpit & Ledger Tactile Materiality）**，针对多智能体协作、四维状态治理、多轮问答讨论流、CAS 乐观锁冲突解决与全屏专注审阅工作流，实现微拟物光影分层、物理斜角高光与触觉按压反馈。
 
 ---
 
@@ -198,3 +198,7 @@ components:
 
 ### 4.3 CAS 并发冲突横幅（`.conflict-banner`）
 - 发生 `409 VersionConflictError` 时展开，左侧具备 `3px solid var(--danger-fg)` 物理警示立柱，左右并列展示“远端提交版本”与“本地草稿”，Diff 增删行采用红绿双色微拟物底色。
+
+---
+
+> 维护提示：涉及界面交互、数据契约或可观测行为调整时，请遵循 [AGENTS.md](AGENTS.md) 中的 `repo-docs` Sync 约定并同步更新 [源码阅读指南](repo-docs/README.md)。

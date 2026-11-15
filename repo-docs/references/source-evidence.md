@@ -1,35 +1,36 @@
 # 源码证据审计
 
-这是固定审计记录，记录 2026-10-29 的两遍调查；行为解释由主流程页承载，源码导航由代码地图承载。
+本页记录基于当前 `HEAD` 源码树的两遍核查依据与验证边界；行为步骤由[主流程走读](../walkthroughs/one-real-run.md)承载，目录与模块索引由[代码地图](../code-map.md)承载。
 
 ## 遍历记录
 
 | 遍历 | 实际检查 | 得到的依据 |
 | --- | --- | --- |
-| Pass 1 | 仓库目录、Git 状态、父级及 root AGENTS/CLAUDE、README、`pyproject.toml`、`core/server.py` 和原有 `docs/agent-workflow.md` 入口 | 确定真实入口、运行命令及现存文档；README 只作线索 |
-| Pass 2 | `core/decision_service.py` 的请求指纹/版本/分阶段回执、`core/agent_hooks.py`，以及 `tests/test_decision_service.py`、`tests/test_usability_regressions.py` | 追踪主路径的输入、输出与失败分支，并对照测试断言 |
+| Pass 1 | 仓库目录、工作区 `AGENTS.md` / `CLAUDE.md`、`pyproject.toml`、`dashboard.config.json`、`start_dashboard.*`、`core/server.py`、`core/config.py` 与旧文档 | 核实纯 Python 标准库零第三方运行时依赖的真实启动入口、端口与配置优先级，识别出旧 `docs-site` 中存在模板残留 |
+| Pass 2 | `core/decision_service.py`（`save_topic`、`edit_latest_round`、`delete_topic`、`restore_single_topic`、`rollback_full`）、`core/db.py`、`core/contracts.py`、`core/recovery.py`、`core/agent_hooks.py`、`core/agent_context.py`、`web/agent-question.js` 与 `tests/*.py`、`tests/*.test.js` | 确认三轴状态、ABA 版本序列、SHA-256 请求指纹幂等、安全归档删除、只读钩子校验规则及前后端安全边界 |
 
 ## 覆盖与排除
 
-覆盖：从 HTTP 保存议题到版本历史、幂等回执与只读核对。未逐项讲解全部恢复/撤销算法、Markdown 渲染器和 UI 交互；不覆盖多人远程协作、跨进程写入协调或断电恢复保证。
-调查时已有 README 与 `web/` 未提交 UI 改动，以及未跟踪数据库和前端资源。本轮保留这些内容，未将它们视为已提交、已验收或生产状态。
+覆盖：HTTP 回环服务入口、三轴状态模型与 `topic_scope`、CAS 乐观锁与 `request_id` 重放、`edit_latest_round` / `delete_topic` / 恢复与重建流水线、只读 Agent 钩子及静态前端 `agent-question` 与 Mermaid/Markdown 防护。未展开逐行 CSS 样式 Token 细节（见根目录 `DESIGN.md`）与仓库维护守卫脚本（`tools/repo_maintenance_guard.py`）；不包含跨进程协调、远程身份认证或断电写落盘保证。
 
 ## 声明与证据
 
 | Claim | Evidence | Confidence | Caveat | Used by |
 | --- | --- | --- | --- | --- |
-| 保存不能覆盖旧版本，重放绑定原请求 | [保存服务](../../core/decision_service.py) 搜索 `req_hash`、`expected_version`；[回归](../../tests/test_decision_service.py) | 已确认 | 未在本轮运行测试 | 主流程 Step 2–3 |
-| 成功保存与 Git 提交是不同阶段 | [服务回执](../../core/decision_service.py) 搜索 `save_status`、`git_status` | 已确认 | Git 失败不代表讨论未落盘 | 主流程 Step 4 |
-| 只读检查不验证业务代码实现 | [核对钩子](../../core/agent_hooks.py) 搜索 `after_write` | 已确认 | 不用于删除/全库恢复确认 | 主流程 Step 4 |
-| 只同意部分范围需要保留原话 | [使用回归](../../tests/test_usability_regressions.py) 搜索 `partial_acceptance` | 已确认 | 服务不理解文本语义 | 主流程 Step 2 |
+| 过期版本不能覆盖新记录，同键同参幂等重放、异参报错 `409` | [保存服务](../../core/decision_service.py) 搜索 `req_hash` / `expected_version`、[数据库](../../core/db.py) `topic_version_seq`、[业务测试](../../tests/test_decision_service.py) | 已确认 | 需在同一服务进程内且通过 HTTP 或 `DecisionService` 调用 | 主流程 Step 2–3、保存与恢复模块 |
+| 台账保存、摘要导出与可选 Git 提交分阶段独立报告 | [保存服务](../../core/decision_service.py) 搜索 `save_status` / `export_status` / `git_status`、[Git 引擎](../../core/git_engine.py) | 已确认 | Git 提交失败或跳过不影响台账已保存事实 | 主流程 Step 4 |
+| `delete_topic` 归档 Markdown 并保留 `TOPIC_REMOVE` 审计与删前快照引用 | [保存服务](../../core/decision_service.py) `delete_topic`、[撤销回归](../../tests/test_undo_regressions.py) | 已确认 | `after-write` 钩子不用于确认删除或全库回滚 | 主流程 Step 4、保存与恢复模块 |
+| 只读钩子校验数据目录、一致性与版本匹配，绝不自动写入或跑测试 | [只读钩子](../../core/agent_hooks.py) `preflight` / `before_task` / `after_write`、[钩子测试](../../tests/test_agent_hooks.py) | 已确认 | 需人工或宿主显式配置并传入目标 `--config` | 主流程 Step 1/4、状态与工作流模块 |
+| 局部同意要求非空用户原话，且三轴相互独立、`agent-question` 不自动改状态 | [状态契约](../../core/contracts.py)、[选项模块](../../web/agent-question.js)、[使用回归](../../tests/test_usability_regressions.py)、[前端选项测试](../../tests/agent-question.test.js) | 已确认 | 服务只验证非空文本与围栏格式，不裁决自然语言语义 | 主流程 Step 2、状态与工作流模块 |
 
 ## 证伪检查与读者下一问
 
-证伪检查：如果同 ID 改 payload 能再保存、旧版本覆盖当前 Markdown，或 `after-write` 接受过期回执，这份解释就失效。应复查对应断言和处理代码，而非只看成功页面。
+证伪检查：若同 `request_id` 修改载荷仍能写入、过期 `expected_version` 覆盖现有 Markdown、`after-write` 接受过期版本号，或未声明 `new_user_opinion` 即成功首次切换至 `partially_accepted`，则本指南对应解释失效，应立即回查对应实现与回归测试。
 
-读者下一问：恢复旧快照后怎样再次保存？需单独追踪 `core/recovery.py` 及恢复回归，本指南不宣称已完整解释恢复协议。
+读者下一问：若外部人工直接编辑了 `decisions/*.md` 导致 `check_consistency` 报摘要漂移，应先备份当前 `decisions.db`（`POST /api/backup`），对照 Markdown 与 SQLite `revisions` 历史差异后再决定是否执行 `--rebuild-index` 或单议题恢复；本指南不将自动重建视为无损合并工具。
 
 ## 验证边界
 
-本轮执行 `validate_repo_docs.py` 和 MkDocs 构建，退出码及完整输出保存在独立维护报告中；不将静态阅读当作业务测试通过。没有部署、生产验收或历史改写。
-所有 `../../` 源码链接按当前磁盘核对；独立站点没有这些仓库文件，MkDocs 对此记 INFO，站内链接仍正常检查。未解析、展示或引用真实凭据和运行时数据库内容；现有未提交文件仅作本地摘要保全。
+本轮同步期间实跑了完整 Python 单元测试（`python3 -m unittest discover tests`：227 项通过）、Node 前端测试（`node --test tests/*.test.js`：12 项通过）、前端脚本语法检查（`node --check`）、文档结构脚本校验（`validate_repo_docs.py`）与 VitePress 文档站静态构建（`pnpm --dir docs-site run docs:build`）。真机浏览器复杂手动交互及 Windows 批处理路径未在本 Linux 环境中完整复测。
+
+证据状态：除特别标注外，本页基于当前源码已确认。

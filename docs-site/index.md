@@ -2,35 +2,47 @@
 layout: home
 
 hero:
-  name: Agent 决策面板
-  text: 现代技术基础设施
-  tagline: Agent Decisions Dashboard 是一个轻量级、面向多智能体（Multi-Agent）协作编程与复杂研发工程的**本地决策记录与审计台账服务**。
+  name: Agent Decisions Dashboard
+  text: 本机决策台账与审阅工作台
+  tagline: 基于 Python 3.9+ 标准库、SQLite 与零构建静态前端打造，专为个人与本机 AI 编程工具协作记录结论、批注原话与版本历史。
   actions:
     - theme: brand
-      text: 快速开始阅读
+      text: 1. 起步与配置部署
       link: /docs/
     - theme: alt
-      text: 交互式架构全景
+      text: 2. 接口与扩展契约
+      link: /docs/contracts
+    - theme: alt
+      text: 3. 原理与源码导览
       link: /docs/architecture
     - theme: alt
       text: GitHub 仓库
       link: https://github.com/CyberNova2333/agent-decisions-dashboard
 
 features:
-  - title: 极简快速上手
-    details: 通俗易懂的文档组织结构，分钟级完成环境搭建与快速启动。
-  - title: 严密安全防护
-    details: 零凭据泄漏防护、受控沙箱隔离与细粒度白名单权限控制。
-  - title: 现代化视觉呈现
-    details: 质感模式与简约模式双向自适应，内建 Archify 交互架构图表。
+  - title: 零运行时依赖
+    details: 后端仅用 Python 3.9+ 标准库与 SQLite，Mermaid 12.1.0 与 Anime.js 4.5.0 全部离线打包，启动无需 Node.js 或外网 CDN。
+  - title: 三轴状态与 CAS 幂等
+    details: 将进展、同意结论与实现进度正交拆解；写入强制检查 expected_version 与 request_id 指纹，支持安全归档删除与快照恢复。
+  - title: 可控 Agent 协作接线
+    details: 提供按 topic_scope 过滤的上下文导出、严格只读的 before-task / after-write 钩子与单选 agent-question 协议卡。
 ---
 
-## 架构全景
+## 按身份/目标快速入口
 
-<div class="archify-diagram-card" style="margin: 1.5rem 0; border: 1px solid var(--vp-c-border); border-radius: 12px; overflow: hidden; background: var(--vp-c-bg-soft); box-shadow: 0 4px 16px rgba(0,0,0,0.06);">
+| 读者身份 / 目标 | 推荐从这里开始 | 说明 |
+|---|---|---|
+| 初次体验或挂载外部项目台账 | [Stage 1 · 起步与配置部署](/docs/) | 包含 `./start_dashboard.sh` / `.bat` 启动方式、`dashboard.config.json` 配置矩阵与排错 |
+| 集成 HTTP API、Agent 钩子或选型评估 | [Stage 2 · 接口与扩展契约](/docs/contracts) | 汇总回环安全边界、REST 端点、三轴状态约束、`agent-question` 与 `before-task` / `after-write` |
+| 阅读实现链路、源码定位或迁移旧版记录 | [Stage 3 · 原理与源码导览（含决策迁移）](/docs/architecture) | 嵌入完整保存主流程走读、目录代码地图、协议迁移及可证伪验证方法 |
+| 维护仓库源码、提交 PR 或查看证据审计 | 仓库根目录 `repo-docs/README.md` 与 `CONTRIBUTING.md` | 本仓库 Standard 源码指南与双遍源码调查记录（随仓库源码维护，不单独打包） |
+
+## 决策生命周期交互图
+
+<div class="diagram-card" style="margin: 1.5rem 0; border: 1px solid var(--vp-c-border); border-radius: 12px; overflow: hidden; background: var(--vp-c-bg-soft); box-shadow: 0 4px 16px rgba(0,0,0,0.06);">
   <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 18px; background: var(--vp-c-bg-elv); border-bottom: 1px solid var(--vp-c-border); font-size: 13px;">
     <span style="font-weight: 600; color: var(--vp-c-text-1); display: flex; align-items: center; gap: 8px;">
-      <span style="font-size: 16px;">📐</span> 决策状态流转全生命周期（基于 Archify 的高保真交互图表，支持平移/缩放/探查）
+      决策状态流转交互图（支持平移 / 缩放 / 节点探查）
     </span>
     <a href="/diagrams/decision-lifecycle.html" target="_blank" rel="noreferrer" style="font-size: 12px; color: var(--vp-c-brand-1); text-decoration: none; font-weight: 500;">
       在新窗口全屏打开 ↗
@@ -39,32 +51,13 @@ features:
   <iframe src="/diagrams/decision-lifecycle.html" width="100%" height="520px" frameborder="0" style="display: block; border: none;" allowfullscreen loading="lazy"></iframe>
 </div>
 
-## 快速上手演示
+## 最简启动路径
 
-```bash
-# 1. 克隆并进入目录
+```sh
 git clone https://github.com/CyberNova2333/agent-decisions-dashboard.git
 cd agent-decisions-dashboard
-
-# 2. 启动本地台账服务（默认监听本地端口 8765）
-python -m core.server
-
-# 3. 提交一条决策记录
-curl -X POST http://127.0.0.1:8765/api/decisions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "topic": "代码托管平台与双端同步规范",
-    "prompt": "将主要代码托管平台切换为 GitHub 个人主开发命名空间",
-    "decision": "默认使用 GitHub noreply 邮箱及独立签名私钥，严禁凭证混用与泄露",
-    "git_commit": true
-  }'
+./start_dashboard.sh --port 8765
+# 或直接执行：python3 -m core.server --port 8765 --no-browser
 ```
 
-## 文档分层导航
-
-::: tip 按照读者需求快速跳转
-- **初次上手**：直接阅读 [快速入门与实战](/docs/)，走通环境配置与首次执行流程；
-- **架构探查**：查阅 [系统架构与设计](/docs/architecture)，全屏体验交互式拓扑图表；
-- **详细配置**：查阅 [配置与使用指南](/docs/configuration)，查阅所有环境变量与参数；
-- **排查解惑**：查阅 [常见问题与排错](/docs/faq)，快速定位解决使用疑难。
-:::
+服务仅监听本机回环地址；启动后在浏览器打开 `http://127.0.0.1:8765/dashboard.html` 即可开始新建与批阅议题。
