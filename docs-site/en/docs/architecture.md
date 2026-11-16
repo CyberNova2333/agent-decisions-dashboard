@@ -18,17 +18,12 @@ This page is synced from the primary Chinese guide ([原理与源码导览（含
 
 ## Decision Lifecycle Interactive Diagram
 
-<div class="diagram-card" style="margin: 1.5rem 0; border: 1px solid var(--vp-c-border); border-radius: 12px; overflow: hidden; background: var(--vp-c-bg-soft); box-shadow: 0 4px 16px rgba(0,0,0,0.06);">
-  <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 18px; background: var(--vp-c-bg-elv); border-bottom: 1px solid var(--vp-c-border); font-size: 13px;">
-    <span style="font-weight: 600; color: var(--vp-c-text-1); display: flex; align-items: center; gap: 8px;">
-      Decision State Lifecycle Interactive Diagram (pan / zoom / inspect supported)
-    </span>
-    <a href="/diagrams/decision-lifecycle.html" target="_blank" rel="noreferrer" style="font-size: 12px; color: var(--vp-c-brand-1); text-decoration: none; font-weight: 500;">
-      Open Fullscreen ↗
-    </a>
-  </div>
-  <iframe src="/diagrams/decision-lifecycle.html" width="100%" height="520px" frameborder="0" style="display: block; border: none;" allowfullscreen loading="lazy"></iframe>
-</div>
+<DiagramFrame
+  src="/diagrams/decision-lifecycle.html"
+  title="Decision State Lifecycle Interactive Diagram (pan / zoom / inspect supported)"
+  aspect="966 / 326"
+  new-tab-label="Open Fullscreen ↗"
+/>
 
 ## End-to-End Write & Replay Walkthrough
 
