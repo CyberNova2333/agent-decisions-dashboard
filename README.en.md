@@ -75,9 +75,9 @@ Markdown holds authoritative current content and `--rebuild-index` reconstructs 
 
 | Goal | Docs Site Stage | Source Guide (`repo-docs/`) |
 |---|---|---|
-| Install, attach projects & configure scopes | [Stage 1: Setup & Configuration](docs-site/en/docs/index.md) | [Source Guide Overview (ZH)](repo-docs/README.md) |
-| Integrate HTTP API, contracts & hooks | [Stage 2: Contracts & Extensions](docs-site/en/docs/contracts.md) | [States & Agent Workflow (ZH)](repo-docs/modules/states-and-agent-workflow.md) |
-| Trace one write run, CAS & migrations | [Stage 3: Architecture & Code Guide](docs-site/en/docs/architecture.md) | [One Real Run Walkthrough (ZH)](repo-docs/walkthroughs/one-real-run.md) |
+| Install, attach projects & configure scopes | [Setup & Configuration](docs-site/en/docs/index.md) | [Source Guide Overview (ZH)](repo-docs/README.md) |
+| Integrate HTTP API, contracts & hooks | [Contracts & Extensions](docs-site/en/docs/contracts.md) | [States & Agent Workflow (ZH)](repo-docs/modules/states-and-agent-workflow.md) |
+| Trace one write run, CAS & migrations | [Architecture & Code Guide](docs-site/en/docs/architecture.md) | [One Real Run Walkthrough (ZH)](repo-docs/walkthroughs/one-real-run.md) |
 | Locate core modules, recovery & tests | [Code Map and Migrations](docs-site/en/docs/architecture.md#code-map-and-key-migrations) | [Code Map](repo-docs/code-map.md) · [Save & Recovery](repo-docs/modules/save-idempotency-and-recovery.md) |
 | Audit evidence, glossary & contributor rules | [Design Spec (`DESIGN.md`)](DESIGN.md) · [Contributing](CONTRIBUTING.md) | [Glossary](repo-docs/glossary.md) · [Source Evidence](repo-docs/references/source-evidence.md) |
 

@@ -3,7 +3,7 @@ title: 接口与扩展契约
 description: HTTP API、安全边界、三轴状态契约、CAS 幂等与重试、agent-question 协议及只读 Agent 钩子完整指南
 ---
 
-# 2. 接口与扩展契约
+# 接口与扩展契约
 
 本阶段定义 HTTP 读写接口、三轴状态与 Markdown 存储契约、Agent 只读钩子与 `agent-question` 单选围栏协议。任何自动化接入都必须通过 HTTP 服务与只读命令行交互，禁止直接改写 `decisions.db` 或 `decisions/metadata.json`。
 

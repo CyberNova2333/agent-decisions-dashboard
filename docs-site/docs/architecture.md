@@ -4,7 +4,7 @@ description: 系统分层架构、生命周期交互图、真实运行主流程�
 repoGuideSource: repo-docs/walkthroughs/one-real-run.md
 ---
 
-# 3. 原理与源码导览（含决策迁移）
+# 原理与源码导览（含决策迁移）
 
 本阶段串联起交互界面、HTTP 回环服务、CAS 并发控制与双源持久化，并直接复用仓库 `repo-docs/` 的真实走读与代码位置索引，同时记录已确认的协议与数据迁移决策。
 

@@ -37,16 +37,16 @@ export default defineConfig({
         ],
         sidebar: [
           {
-            text: '三阶段文档导览',
+            text: '文档导览',
             items: [
-              { text: '1. 起步与配置部署', link: '/docs/' },
-              { text: '2. 接口与扩展契约', link: '/docs/contracts' },
-              { text: '3. 原理与源码导览（含决策迁移）', link: '/docs/architecture' },
+              { text: '起步与配置部署', link: '/docs/' },
+              { text: '接口与扩展契约', link: '/docs/contracts' },
+              { text: '原理与源码导览', link: '/docs/architecture' },
             ],
           },
         ],
         outline: { level: [2, 3], label: '本页目录' },
-        docFooter: { prev: '上一阶段', next: '下一阶段' },
+        docFooter: { prev: '上一页', next: '下一页' },
       },
     },
     en: {
@@ -66,16 +66,16 @@ export default defineConfig({
         ],
         sidebar: [
           {
-            text: 'Progressive Guide',
+            text: 'Documentation Guide',
             items: [
-              { text: '1. Setup & Configuration', link: '/en/docs/' },
-              { text: '2. API Contracts & Extensions', link: '/en/docs/contracts' },
-              { text: '3. Architecture, Code & Migrations', link: '/en/docs/architecture' },
+              { text: 'Setup & Configuration', link: '/en/docs/' },
+              { text: 'API Contracts & Extensions', link: '/en/docs/contracts' },
+              { text: 'Architecture, Code & Migrations', link: '/en/docs/architecture' },
             ],
           },
         ],
         outline: { level: [2, 3], label: 'On this page' },
-        docFooter: { prev: 'Previous stage', next: 'Next stage' },
+        docFooter: { prev: 'Previous page', next: 'Next page' },
       },
     },
   },

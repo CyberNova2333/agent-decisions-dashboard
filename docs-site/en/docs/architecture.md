@@ -3,7 +3,7 @@ title: Architecture, Code Map & Migrations
 description: Layered architecture, lifecycle diagram, write walkthrough summary, codebase map, and key schema/behavior migrations
 ---
 
-# 3. Architecture, Code Map & Migrations
+# Architecture, Code Map & Migrations
 
 ::: warning AI Translation Notice
 This page is synced from the primary Chinese guide ([原理与源码导览（含决策迁移）](/docs/architecture)). The repository's authoritative walkthrough and evidence audit under `repo-docs/` are written in Chinese; see the Chinese docs page for the full embedded walkthrough.

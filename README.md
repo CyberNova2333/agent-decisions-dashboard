@@ -75,9 +75,9 @@ Markdown 保存当前最新正文，可用 `--rebuild-index` 重建 `topics` 索
 
 | 你的目标 | 文档站入口 | 源码指南入口 |
 |---|---|---|
-| 安装启动、接入外部项目与配置排错 | [Stage 1：起步与配置部署](docs-site/docs/index.md) | [源码指南入口与运行说明](repo-docs/README.md) |
-| 对接 HTTP API、三轴契约与只读钩子 | [Stage 2：接口与扩展契约](docs-site/docs/contracts.md) | [三轴状态模型与 Agent 工作流](repo-docs/modules/states-and-agent-workflow.md) |
-| 跟踪一次完整写入与幂等/恢复原理 | [Stage 3：原理与源码导览](docs-site/docs/architecture.md) | [一次讨论怎样保存成可追溯记录](repo-docs/walkthroughs/one-real-run.md) |
+| 安装启动、接入外部项目与配置排错 | [起步与配置部署](docs-site/docs/index.md) | [源码指南入口与运行说明](repo-docs/README.md) |
+| 对接 HTTP API、三轴契约与只读钩子 | [接口与扩展契约](docs-site/docs/contracts.md) | [三轴状态模型与 Agent 工作流](repo-docs/modules/states-and-agent-workflow.md) |
+| 跟踪一次完整写入与幂等/恢复原理 | [原理与源码导览](docs-site/docs/architecture.md) | [一次讨论怎样保存成可追溯记录](repo-docs/walkthroughs/one-real-run.md) |
 | 定位核心模块代码、归档机制与测试 | [代码地图与决策迁移](docs-site/docs/architecture.md#源码目录与模块地图) | [代码地图](repo-docs/code-map.md) · [保存与恢复模块](repo-docs/modules/save-idempotency-and-recovery.md) |
 | 审查源码核对证据、术语与同步基线 | [设计规范 (`DESIGN.md`)](DESIGN.md) · [贡献与安全](CONTRIBUTING.md) | [核心术语表](repo-docs/glossary.md) · [源码证据审计](repo-docs/references/source-evidence.md) |
 

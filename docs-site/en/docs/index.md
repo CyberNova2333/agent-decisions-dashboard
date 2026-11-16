@@ -3,7 +3,7 @@ title: Setup & Configuration
 description: Product scope, runtime modes, CLI arguments, dashboard.config.json matrix, and deployment troubleshooting
 ---
 
-# 1. Setup & Configuration
+# Setup & Configuration
 
 ::: warning AI Translation Notice
 This page is synced from the primary Chinese guide ([起步与配置部署](/docs/)). Refer to the Chinese version if any detail needs clarification.

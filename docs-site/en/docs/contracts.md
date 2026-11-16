@@ -3,7 +3,7 @@ title: API Contracts & Extensions
 description: Loopback security rules, HTTP REST API, orthogonal 3-axis model, CAS/idempotency retry contract, agent-question fence, and read-only hooks
 ---
 
-# 2. API Contracts & Extensions
+# API Contracts & Extensions
 
 ::: warning AI Translation Notice
 This page is synced from the primary Chinese guide ([接口与扩展契约](/docs/contracts)). Refer to the Chinese version if any detail is ambiguous.
