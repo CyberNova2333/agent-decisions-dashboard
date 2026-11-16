@@ -10,8 +10,8 @@ hero:
       text: Setup & Config
       link: /en/docs/
     - theme: alt
-      text: Contracts & Hooks
-      link: /en/docs/contracts
+      text: API & Components
+      link: /en/api-reference/
     - theme: alt
       text: Architecture & Code
       link: /en/docs/architecture
@@ -30,6 +30,20 @@ features:
 
 ::: warning AI Translation Notice
 The English documentation is maintained alongside the primary Chinese docs. In case of any subtle discrepancy, please treat the [Chinese documentation](/) as authoritative.
+:::
+
+## Capabilities & Explicit Boundaries
+
+::: info What It Can Do (Delivered Scope)
+- **Zero-Dependency Local Startup & External Attach**: Runs solely on the Python 3.9+ standard library and SQLite; attach any external project directory cleanly via `--config /path/to/dashboard.config.json`.
+- **Traceable Ledger, Review & Recovery**: Coordinates authoritative `schema_version: "2.0"` Markdown files with SQLite `revisions`, CAS `expected_version` locks, `request_id` idempotent replay, online `/api/backup`, and path-isolated auto Git commits.
+- **Scoped Agent Context & Read-Only Hooks**: Exports five-bucket decision context, isolates `partially_accepted` as pending requirements, and exposes `before-task` / `after-write` CLI verification plus non-authorizing `agent-question` cards.
+:::
+
+::: warning What It Explicitly Cannot Do (Non-Goals & Hard Limits)
+- **No Remote Hosting or Multi-User Concurrency**: Loopback-only (`127.0.0.1` / `localhost`, rejecting `0.0.0.0`) with an in-process lock — **no user accounts, RBAC, remote authentication, or multi-process sharing of one `decisions.db`**.
+- **Never Executes Code, Builds, or Tests**: Marking `accepted`/`verified` or selecting an `agent-question` option records ledger text only — **the server and hooks never trigger builds, run tests, or grant execution authority**.
+- **`metadata.json` / Markdown Alone Do Not Replace `decisions.db`**: `metadata.json` is a read-only summary export and Markdown holds latest content only; full `revisions` and `idempotency_keys` live solely in `decisions.db`.
 :::
 
 ## Decision Lifecycle Interactive Diagram
@@ -61,7 +75,7 @@ The server binds exclusively to loopback addresses; open `http://127.0.0.1:8765/
 
 ::: tip Quick Navigation by Role & Goal
 - **First local run or attaching an external project**: Start with [Setup & Configuration](/en/docs/) for `./start_dashboard.sh` / `.bat`, CLI flags, `dashboard.config.json` matrix, and troubleshooting;
-- **Integrating HTTP API, state contracts, or agent hooks**: Read [API Contracts & Extensions](/en/docs/contracts) for loopback security rules, REST endpoints, 3-axis model, `agent-question`, and `core.agent_hooks`;
-- **Tracing persistence flow, code map, or schema migrations**: See [Architecture, Code & Migrations](/en/docs/architecture) for request/storage lifecycle, `core/` & `web/` & `tests/` map, and migration notes;
+- **Explore endpoints, hooks & copy-ready call examples**: Open [API & Component Reference](/en/api-reference/) or read the full prose spec in [API Contracts & Extensions](/en/docs/contracts);
+- **Tracing persistence flow, code map, or schema migrations**: See [Architecture, Code & Migrations](/en/docs/architecture) for request/storage lifecycle and `core/` / `web/` / `tests/` map;
 - **Deep Chinese source guide & two-pass audit**: See `repo-docs/README.md` in the repository root.
 :::

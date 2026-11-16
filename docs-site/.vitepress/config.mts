@@ -32,8 +32,8 @@ export default defineConfig({
           { text: '首页', link: '/' },
           { text: '起步与部署', link: '/docs/' },
           { text: '接口与契约', link: '/docs/contracts' },
+          { text: 'API 与组件', link: '/api-reference/' },
           { text: '原理与源码', link: '/docs/architecture' },
-          { text: 'GitHub', link: 'https://github.com/CyberNova2333/agent-decisions-dashboard' },
         ],
         sidebar: [
           {
@@ -41,6 +41,7 @@ export default defineConfig({
             items: [
               { text: '起步与配置部署', link: '/docs/' },
               { text: '接口与扩展契约', link: '/docs/contracts' },
+              { text: 'API 与组件参考', link: '/api-reference/' },
               { text: '原理与源码导览', link: '/docs/architecture' },
             ],
           },
@@ -61,8 +62,8 @@ export default defineConfig({
           { text: 'Home', link: '/en/' },
           { text: 'Setup & Config', link: '/en/docs/' },
           { text: 'Contracts & Hooks', link: '/en/docs/contracts' },
+          { text: 'API & Components', link: '/en/api-reference/' },
           { text: 'Architecture & Code', link: '/en/docs/architecture' },
-          { text: 'GitHub', link: 'https://github.com/CyberNova2333/agent-decisions-dashboard' },
         ],
         sidebar: [
           {
@@ -70,6 +71,7 @@ export default defineConfig({
             items: [
               { text: 'Setup & Configuration', link: '/en/docs/' },
               { text: 'API Contracts & Extensions', link: '/en/docs/contracts' },
+              { text: 'API & Component Reference', link: '/en/api-reference/' },
               { text: 'Architecture, Code & Migrations', link: '/en/docs/architecture' },
             ],
           },
@@ -81,5 +83,8 @@ export default defineConfig({
   },
   themeConfig: {
     search: { provider: 'local' },
+    socialLinks: [
+      { icon: 'github', link: 'https://github.com/CyberNova2333/agent-decisions-dashboard' },
+    ],
   },
 })

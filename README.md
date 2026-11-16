@@ -7,7 +7,15 @@
 [![Runtime: Python Stdlib](https://img.shields.io/badge/Runtime-Python_Stdlib-orange.svg)](./pyproject.toml)
 [![Tests: unittest](https://img.shields.io/badge/Tests-unittest-blue.svg)](./tests/)
 
-面向个人与本机 AI 编程工具协作的轻量决策台账：后端仅依赖 Python 3.9+ 标准库与 SQLite，前端采用零构建静态资源与离线打包库；仅用于本机回环记录、批注审阅与历史追溯，不提供远程账号权限、多人并发协调、任务调度或自动执行 Agent。
+面向个人与本机 AI 编程工具协作的轻量决策台账：后端仅依赖 Python 3.9+ 标准库与 SQLite，前端采用零构建静态资源与离线打包库；仅用于本机回环记录、批注审阅与历史追溯。
+
+## 能做到什么程度与明确不能做什么
+
+| 维度 | ✅ 能做到什么程度（已实现） | ⛔ 明确不能做什么（非目标与限制） |
+| --- | --- | --- |
+| 运行与部署 | 纯 Python 3.9+ 标准库 + SQLite，零 CDN 零构建运行；支持 `--config` 挂载外部项目目录 | 严格限制回环主机（拒绝 `0.0.0.0`），单进程锁，不支持多人并发或远程鉴权 |
+| 记录与恢复 | `schema_version: "2.0"` Markdown + SQLite 历史快照、CAS 锁、`request_id` 幂等、在线备份与隔离 Git 提交 | 仅靠 `metadata.json` 不能还原历史；服务端不替代业务仓库构建或合并分支 |
+| Agent 接线 | 按 `topic_scope` 导出五桶上下文、只读 CLI 钩子与 `agent-question` 单选卡 | `accepted` / `verified` 仅存台账文本，绝不自动跑测试或授予 Shell 执行权 |
 
 ## 核心能力与数据流
 
@@ -76,6 +84,7 @@ Markdown 保存当前最新正文，可用 `--rebuild-index` 重建 `topics` 索
 | 你的目标 | 文档站入口 | 源码指南入口 |
 |---|---|---|
 | 安装启动、接入外部项目与配置排错 | [起步与配置部署](docs-site/docs/index.md) | [源码指南入口与运行说明](repo-docs/README.md) |
+| 逐一查询端点、CLI 参数与调用示例 | [API 与组件参考](docs-site/api-reference/index.md) | [接口与扩展契约](docs-site/docs/contracts.md) |
 | 对接 HTTP API、三轴契约与只读钩子 | [接口与扩展契约](docs-site/docs/contracts.md) | [三轴状态模型与 Agent 工作流](repo-docs/modules/states-and-agent-workflow.md) |
 | 跟踪一次完整写入与幂等/恢复原理 | [原理与源码导览](docs-site/docs/architecture.md) | [一次讨论怎样保存成可追溯记录](repo-docs/walkthroughs/one-real-run.md) |
 | 定位核心模块代码、归档机制与测试 | [代码地图与决策迁移](docs-site/docs/architecture.md#源码目录与模块地图) | [代码地图](repo-docs/code-map.md) · [保存与恢复模块](repo-docs/modules/save-idempotency-and-recovery.md) |

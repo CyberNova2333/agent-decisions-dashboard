@@ -9,10 +9,12 @@ description: 确认产品定位、运行模式、CLI 参数、dashboard.config.j
 
 ## 定位与适用边界
 
-- **零第三方运行时**：后端仅使用 Python 3.9+ 标准库与内置 `sqlite3`；前端为静态 HTML/CSS/Vanilla JS，离线捆绑 `web/vendor/`（Mermaid 12.1.0、Anime.js 4.5.0、IBM Plex Sans 字体），无需安装 npm 依赖或连接外部 CDN。
-- **可选开发工具**：`Node.js` 仅用于执行 `tests/*.test.js` 与 `node --check` 语法校验；`pnpm` 仅用于构建 `docs-site/` 静态文档站。
-- **单机单进程约束**：服务强制仅监听本机回环地址（`127.0.0.1`、`localhost` 或回环 IPv4/IPv6）；使用进程内 `threading.RLock`，**同一 `database_path` 在同一时刻只能由单个服务进程管理**。
-- **明确排除项**：不提供远端账号认证、团队多人并发锁定、后台任务排期或自动执行 Agent；离线 CLI 维护操作（如 `--rebuild-index`）应先停止活跃服务。
+| 维度 | ✅ 能做到什么程度 | ⛔ 明确不能做什么 |
+|---|---|---|
+| **运行时栈** | Python 3.9+ 标准库 + `sqlite3`；离线打包 Mermaid/Anime.js/字体，无需外网 CDN | 不在运行时依赖 Node.js/pnpm（仅分别用于 JS 单测和构建文档站） |
+| **持久化与并发** | 权威 `decisions/*.md` + SQLite `revisions` 快照 + `expected_version` CAS 乐观锁与幂等缓存 | 强制仅监听回环地址、进程内线程锁，**不支持远程多用户登录或多进程共用同一 `database_path`** |
+| **Agent 协同** | 导出五桶治理上下文、执行 `before-task` / `after-write` 只读检查、渲染 `agent-question` 单选卡 | 不提供后台任务调度、不自动执行项目构建/测试、不替用户授权脚本执行 |
+| **运维与 Git** | 在线热备份 `/api/backup`、基于 `.md` 重建索引、`core.git_engine` 路径隔离提交 | 离线 `--rebuild-index` 须先停服；不提交无关暂存代码，也不做远程自动 `git push` |
 
 ## 运行模式与 CLI 入口
 

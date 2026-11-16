@@ -7,7 +7,15 @@
 [![Runtime: Python Stdlib](https://img.shields.io/badge/Runtime-Python_Stdlib-orange.svg)](./pyproject.toml)
 [![Tests: unittest](https://img.shields.io/badge/Tests-unittest-blue.svg)](./tests/)
 
-A local decision ledger and review workbench for human-agent engineering collaboration, built on the Python 3.9+ standard library, SQLite, and zero-build static assets. Scope boundary: single-process loopback service for recording, reviewing, and tracing decisions; it does not provide multi-user auth, remote hosting, task scheduling, or autonomous agent execution.
+A local decision ledger and review workbench for human-agent engineering collaboration, built on the Python 3.9+ standard library, SQLite, and zero-build static assets.
+
+## Capabilities & Explicit Boundaries
+
+| Dimension | ✅ What It Can Do (Delivered) | ⛔ Explicit Non-Goals & Limits |
+| --- | --- | --- |
+| Runtime & Scope | Runs purely on Python 3.9+ stdlib + SQLite with zero CDN/build step; attaches external projects via `--config` | Loopback-only (rejects `0.0.0.0`), single-process lock; no remote auth or multi-user sharing of one DB |
+| Ledger & Recovery | `schema_version: "2.0"` Markdown + SQLite `revisions`, CAS locks, `request_id` idempotency, hot backups & isolated Git commits | `metadata.json` cannot restore snapshots alone; never replaces build/CI pipelines |
+| Agent Integration | `topic_scope`-filtered 5-bucket context export, read-only `agent_hooks` CLI, and `agent-question` radio cards | `accepted` / `verified` labels stay passive records and never run tests or grant shell execution |
 
 ## Core Capabilities & Data Flow
 
@@ -76,6 +84,7 @@ Markdown holds authoritative current content and `--rebuild-index` reconstructs 
 | Goal | Docs Site Stage | Source Guide (`repo-docs/`) |
 |---|---|---|
 | Install, attach projects & configure scopes | [Setup & Configuration](docs-site/en/docs/index.md) | [Source Guide Overview (ZH)](repo-docs/README.md) |
+| Browse endpoints, CLI flags & call examples | [API & Component Reference](docs-site/en/api-reference/index.md) | [Contracts & Extensions](docs-site/en/docs/contracts.md) |
 | Integrate HTTP API, contracts & hooks | [Contracts & Extensions](docs-site/en/docs/contracts.md) | [States & Agent Workflow (ZH)](repo-docs/modules/states-and-agent-workflow.md) |
 | Trace one write run, CAS & migrations | [Architecture & Code Guide](docs-site/en/docs/architecture.md) | [One Real Run Walkthrough (ZH)](repo-docs/walkthroughs/one-real-run.md) |
 | Locate core modules, recovery & tests | [Code Map and Migrations](docs-site/en/docs/architecture.md#code-map-and-key-migrations) | [Code Map](repo-docs/code-map.md) · [Save & Recovery](repo-docs/modules/save-idempotency-and-recovery.md) |

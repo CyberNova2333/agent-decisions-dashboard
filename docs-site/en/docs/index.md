@@ -11,10 +11,12 @@ This page is synced from the primary Chinese guide ([起步与配置部署](/doc
 
 ## Scope & Runtime Footprint
 
-- **Zero third-party runtime dependencies**: Backend uses only the Python 3.9+ standard library and built-in `sqlite3`. The frontend under `web/` is plain HTML/CSS/JS with offline bundled assets (`web/vendor/` containing Mermaid 12.1.0, Anime.js 4.5.0, and IBM Plex Sans) — no npm build or internet CDN is required to run the dashboard.
-- **Optional tooling**: `Node.js` is only required for running `tests/*.test.js` and `node --check`; `pnpm` is only required to build `docs-site/`.
-- **Single-process loopback constraint**: The HTTP server accepts loopback hosts only (`127.0.0.1`, `localhost`, or loopback IPv4/IPv6) and serializes writes with an in-process `threading.RLock`. Manage each `database_path` with one running server instance only.
-- **Explicit non-goals**: No multi-user accounts, remote authentication, task scheduling, or autonomous agent execution. Stop the server before running offline index-rebuild CLI operations.
+| Dimension | ✅ What It Can Do | ⛔ Explicit Non-Goals & Limits |
+|---|---|---|
+| **Runtime Stack** | Pure Python 3.9+ stdlib + `sqlite3`; offline bundled Mermaid/Anime.js/fonts with zero CDN | Does not require Node.js or pnpm at runtime (only for JS unit tests and building `docs-site/`) |
+| **Storage & Concurrency** | Authoritative `decisions/*.md` + SQLite `revisions`, CAS `expected_version`, and `request_id` idempotency | Loopback-only socket + in-process `RLock`: **no remote auth or multi-process sharing of one DB** |
+| **Agent Integration** | Five-bucket context export, read-only `before-task` / `after-write` CLI hooks, `agent-question` cards | No task scheduling, autonomous agents, or automatic build/test execution |
+| **Ops & Git** | Online `/api/backup`, Markdown-grounded index rebuild, path-isolated `core.git_engine` commits | Stop server before `--rebuild-index`; never auto-pushes or stages unrelated code |
 
 ## Startup Modes & CLI Flags
 
