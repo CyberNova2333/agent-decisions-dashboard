@@ -1,6 +1,6 @@
 # Agent Decisions Dashboard
 
-[简体中文](README.md) · [Live Docs](https://cybernova2333.github.io/agent-decisions-dashboard/en/) · [Docs Source](docs-site/en/index.md) · [Chinese Source Guide](repo-docs/README.md)
+[简体中文](README.md) · [Live Docs](https://agent-decisions-dashboard.cbnv.me/en/) · [Docs Source](docs-site/en/index.md) · [Chinese Source Guide](repo-docs/README.md)
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPLv3-blue.svg)](./LICENSE)
 [![Python: 3.9+](https://img.shields.io/badge/Python-3.9%2B-brightgreen.svg)](./pyproject.toml)

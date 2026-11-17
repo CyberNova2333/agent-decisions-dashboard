@@ -13,8 +13,8 @@
   "featured": true,
   "order": 7,
   "repository": "https://github.com/CyberNova2333/agent-decisions-dashboard",
-  "homepage": "https://cybernova2333.github.io/agent-decisions-dashboard/",
-  "docsUrl": "https://cybernova2333.github.io/agent-decisions-dashboard/docs/",
+  "homepage": "https://agent-decisions-dashboard.cbnv.me",
+  "docsUrl": "https://agent-decisions-dashboard.cbnv.me/docs/",
   "license": "AGPL-3.0-only",
   "primaryLanguage": "Python",
   "techStack": [
@@ -58,5 +58,5 @@
       "en": "In daily local use with review annotations, question cards, and snapshot backups."
     }
   },
-  "updatedAt": "2026-11-11"
+  "updatedAt": "2026-11-17"
 }
