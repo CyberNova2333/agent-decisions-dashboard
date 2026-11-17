@@ -12,7 +12,11 @@
 </p>
 
 <p align="center">
-  <a href="README.md">简体中文</a> · <strong>English</strong> · <a href="https://agent-decisions-dashboard.cbnv.me/en/">Live Docs</a> · <a href="docs-site/en/index.md">Docs Source</a> · <a href="repo-docs/README.md">Chinese Source Guide</a>
+  <a href="README.md">简体中文</a> | <strong>English</strong>
+</p>
+
+<p align="center">
+  <a href="https://agent-decisions-dashboard.cbnv.me/en/">Live Docs</a> · <a href="docs-site/en/index.md">Docs Source</a> · <a href="repo-docs/README.md">Chinese Source Guide</a>
 </p>
 
 A local decision ledger and review workbench for human-agent engineering collaboration, built on the Python 3.9+ standard library, SQLite, and zero-build static assets.

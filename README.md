@@ -12,7 +12,11 @@
 </p>
 
 <p align="center">
-  <strong>简体中文</strong> · <a href="README.en.md">English</a> · <a href="https://agent-decisions-dashboard.cbnv.me/">在线文档</a> · <a href="docs-site/index.md">文档站源码</a> · <a href="repo-docs/README.md">中文源码指南</a>
+  <strong>简体中文</strong> | <a href="README.en.md">English</a>
+</p>
+
+<p align="center">
+  <a href="https://agent-decisions-dashboard.cbnv.me/">在线文档</a> · <a href="docs-site/index.md">文档站源码</a> · <a href="repo-docs/README.md">中文源码指南</a>
 </p>
 
 面向个人与本机 AI 编程工具协作的轻量决策台账：后端仅依赖 Python 3.9+ 标准库与 SQLite，前端采用零构建静态资源与离线打包库；仅用于本机回环记录、批注审阅与历史追溯。
