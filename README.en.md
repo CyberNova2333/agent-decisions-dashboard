@@ -1,11 +1,19 @@
-# Agent Decisions Dashboard
+<p align="center">
+  <img src="web/brand-logo.svg" alt="Agent Decisions Dashboard" width="72" height="72" />
+</p>
 
-[简体中文](README.md) · [Live Docs](https://agent-decisions-dashboard.cbnv.me/en/) · [Docs Source](docs-site/en/index.md) · [Chinese Source Guide](repo-docs/README.md)
+<h1 align="center">Agent Decisions Dashboard</h1>
 
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPLv3-blue.svg)](./LICENSE)
-[![Python: 3.9+](https://img.shields.io/badge/Python-3.9%2B-brightgreen.svg)](./pyproject.toml)
-[![Runtime: Python Stdlib](https://img.shields.io/badge/Runtime-Python_Stdlib-orange.svg)](./pyproject.toml)
-[![Tests: unittest](https://img.shields.io/badge/Tests-unittest-blue.svg)](./tests/)
+<p align="center">
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-AGPLv3-blue.svg" alt="License: AGPL v3" /></a>
+  <a href="./pyproject.toml"><img src="https://img.shields.io/badge/Python-3.9%2B-brightgreen.svg" alt="Python: 3.9+" /></a>
+  <a href="./pyproject.toml"><img src="https://img.shields.io/badge/Runtime-Python_Stdlib-orange.svg" alt="Runtime: Python Stdlib" /></a>
+  <a href="./tests/"><img src="https://img.shields.io/badge/Tests-unittest-blue.svg" alt="Tests: unittest" /></a>
+</p>
+
+<p align="center">
+  <a href="README.md">简体中文</a> · <strong>English</strong> · <a href="https://agent-decisions-dashboard.cbnv.me/en/">Live Docs</a> · <a href="docs-site/en/index.md">Docs Source</a> · <a href="repo-docs/README.md">Chinese Source Guide</a>
+</p>
 
 A local decision ledger and review workbench for human-agent engineering collaboration, built on the Python 3.9+ standard library, SQLite, and zero-build static assets.
 
