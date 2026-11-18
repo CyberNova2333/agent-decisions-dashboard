@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+# SPDX-License-Identifier: AGPL-3.0-only
+# This file is part of Agent Decisions Dashboard and is licensed under GNU AGPLv3 with Additional Terms (see LICENSE and ADDITIONAL_TERMS.zh-CN.md; ref: ADDITIONAL_TERMS.en.md).
 """
 Agent Decisions Dashboard - Agent Context & Verification Engine
 面向 Agent 的只读上下文导出、已否决红线约束输出与实现证据核验绑定
