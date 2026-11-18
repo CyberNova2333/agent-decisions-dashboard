@@ -106,4 +106,4 @@ Markdown 保存当前最新正文，可用 `--rebuild-index` 重建 `topics` 索
 
 本项目代码依据 [GNU AGPLv3 (`AGPL-3.0-only`)](./LICENSE) 许可开源。随仓库离线打包的前端资产保留各自原始许可声明，包括 `web/vendor/` 下的 Mermaid 12.1.0（[MIT](./web/vendor/mermaid-LICENSE)）、Anime.js 4.5.0（[MIT](./web/vendor/ANIMEJS-LICENSE.md)）与 IBM Plex Sans 字体（[OFL](./web/vendor/IBM-Plex-Sans-LICENSE.txt)）。
 
-- **附加条款与资产规则**：本项目依据 GNU AGPLv3 第 7 条适用 [`ADDITIONAL_TERMS.zh-CN.md`](ADDITIONAL_TERMS.zh-CN.md)（英文参考译文：[`ADDITIONAL_TERMS.en.md`](ADDITIONAL_TERMS.en.md)，以简体中文完整版正文为准），对来源陈述、修改标识、禁止冒充、扩展模块有条件附加许可及项目标识边界作出补充说明；独立美术、字体与图标许可清单见 [`ASSET_LICENSES.md`](ASSET_LICENSES.md)。第 9.5–9.6 款的附加许可豁免仅对已取得相应版权持有人有效授权的适用材料生效，未取得该等授权的第三方或上游材料仍受其原有有效许可约束。
+- **附加条款与资产规则**：本项目依据 GNU AGPLv3 第 7 条适用 [`LICENSE-ADDITIONAL_TERMS-zh-CN.md`](LICENSE-ADDITIONAL_TERMS-zh-CN.md)（英文参考译文：[`LICENSE-ADDITIONAL_TERMS-en.md`](LICENSE-ADDITIONAL_TERMS-en.md)，以简体中文完整版正文为准），对来源陈述、修改标识、禁止冒充、扩展模块有条件附加许可及项目标识边界作出补充说明；独立美术、字体与图标许可清单见 [`ASSET_LICENSES.md`](ASSET_LICENSES.md)。第 9.5–9.6 款的附加许可豁免仅对已取得相应版权持有人有效授权的适用材料生效，未取得该等授权的第三方或上游材料仍受其原有有效许可约束。

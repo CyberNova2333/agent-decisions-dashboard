@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # SPDX-License-Identifier: AGPL-3.0-only
-# This file is part of Agent Decisions Dashboard and is licensed under GNU AGPLv3 with Additional Terms (see LICENSE and ADDITIONAL_TERMS.zh-CN.md; ref: ADDITIONAL_TERMS.en.md).
+# This file is part of Agent Decisions Dashboard and is licensed under GNU AGPLv3 with Additional Terms (see LICENSE and LICENSE-ADDITIONAL_TERMS-zh-CN.md; ref: LICENSE-ADDITIONAL_TERMS-en.md).
 """
 Agent Decisions Dashboard - Database Manager
 SQLite 结构化存储、正交状态模型、版本快照管理、版本乐观锁与一键回滚引擎
