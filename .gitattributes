@@ -6,3 +6,7 @@ tools/repo_maintenance_guard.py text eol=lf
 tools/repo_maintenance_hooks/pre-commit text eol=lf
 tools/repo_maintenance_hooks/commit-msg text eol=lf
 tools/repo_maintenance_hooks/pre-push text eol=lf
+
+# Exclude documentation site sources and generated diagram bundles from GitHub language statistics.
+docs-site/** linguist-documentation=true
+docs-site/public/diagrams/** linguist-generated=true
