@@ -5,6 +5,17 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      include_frontend_checks:
+        description: '是否同时运行 Node 前端语法检查与 JS 单元测试'
+        required: false
+        type: boolean
+        default: true
+      test_pattern:
+        description: '可选：传给 Python unittest -k 的测试筛选关键字'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -20,12 +31,31 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: 检出仓库
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - name: 配置 Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
       - name: 字节码语法检查
         run: python3 -B -m compileall -q core tests
-      - name: 运行单元测试
-        run: python3 -B -m unittest discover -s tests -v
+      - name: 运行 Python 单元测试
+        env:
+          TEST_PATTERN: ${{ github.event_name == 'workflow_dispatch' && inputs.test_pattern || '' }}
+        run: |
+          if [ -n "$TEST_PATTERN" ]; then
+            python3 -B -m unittest discover -s tests -k "$TEST_PATTERN" -v
+          else
+            python3 -B -m unittest discover -s tests -v
+          fi
+      - name: 配置 Node.js
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.include_frontend_checks }}
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: 前端语法与 JS 单元测试
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.include_frontend_checks }}
+        run: |
+          node --check web/app.js
+          node --test tests/*.test.js
